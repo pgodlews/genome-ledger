@@ -1,0 +1,4 @@
+trait	rsid	chrom	pos	ref	effect	interp0	interp1	interp2	note
+HLA-B27 (ankylosing spondylitis)	rs4349859	6	31398010	G	A	HLA-B27 negative	HLA-B27 positive (1 copy) — increased ankylosing spondylitis risk	HLA-B27 positive (2 copies) — increased ankylosing spondylitis risk	tag SNP for HLA-B*27
+Celiac DQ2.5 haplotype	rs2187668	6	32638107	C	T	DQ2.5 absent	DQ2.5 present (1 copy) — celiac-susceptibility haplotype	DQ2.5 present (2 copies) — celiac-susceptibility haplotype	tags HLA-DQA1*05:01–DQB1*02:01
+Celiac DQ8 haplotype	rs7454108	6	32713706	T	C	DQ8 absent	DQ8 present (1 copy) — celiac-susceptibility haplotype	DQ8 present (2 copies) — celiac-susceptibility haplotype	tags HLA-DQB1*03:02

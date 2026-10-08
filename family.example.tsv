@@ -1,0 +1,4 @@
+id	display_name	sex	father	mother	partner
+child	Child Name	female	father	mother	
+father	Father Name	male			mother
+mother	Mother Name	female			father

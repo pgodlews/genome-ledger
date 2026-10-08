@@ -1,0 +1,80 @@
+# Genome Ledger with Docker Compose — Linux x86-64 only. See docs/docker.md.
+#
+#   docker compose up demo                      the synthetic demo, at http://127.0.0.1:8765/
+#   docker compose run --rm pipeline <command>  any run.py command (setup, ingest, scan, …)
+#   docker compose up -d serve                  the dashboards, at http://127.0.0.1:8765/
+#   docker compose up -d scheduler              a daily check for new ClinVar releases
+#
+# Every service is named explicitly; a bare `docker compose up` starts nothing. Create the
+# three directories below yourself first (docs/docker.md) — Docker creates a missing mount
+# directory as root, and the pipeline, which runs as you, then cannot write to it.
+#
+# Three host directories, kept apart because they are treated differently:
+#   GENOMES_DIR  raw reads, CRAMs, calls, database, snapshots   irreplaceable: back it up
+#   REFS_DIR     reference, annotation cache, downloaded tools  re-downloadable, tens of GB
+#   REPORTS_DIR  reports as md/, json/ and html/                the only part you read
+name: genome-ledger
+
+x-pipeline: &pipeline
+  build: .
+  image: genome-ledger:local
+  platform: linux/amd64
+  # Run as you, so files on the mounts are yours. Put PUID/PGID in .env (docs/docker.md).
+  user: "${PUID:-1000}:${PGID:-1000}"
+  environment:
+    NOTIFY_CMD: "${NOTIFY_CMD:-}"
+    PRS_S1_GATE: "${PRS_S1_GATE:-1}"
+  volumes:
+    - ${GENOMES_DIR:-./data/genomes}:/data
+    - ${REFS_DIR:-./data/refs}/refs:/data/refs
+    - ${REFS_DIR:-./data/refs}/vep_cache:/data/vep_cache
+    - ${REFS_DIR:-./data/refs}/tools:/data/tools
+    - ${REPORTS_DIR:-./data/reports}:/data/reports
+
+services:
+  # On demand: `docker compose run --rm pipeline scan`. Not started by `up`.
+  pipeline:
+    <<: *pipeline
+    profiles: ["cli"]
+
+  # The dashboards. Mounts the rendered pages only, read-only: no genome, no database, no
+  # markdown. The pages themselves are sensitive — names, family relationships, genetic
+  # results — and the server has no authentication, so it is bound to this machine.
+  serve:
+    image: genome-ledger:local
+    build: .
+    platform: linux/amd64
+    user: "${PUID:-1000}:${PGID:-1000}"
+    command: ["serve", "--host", "0.0.0.0", "--port", "8765"]
+    profiles: ["web"]
+    read_only: true
+    tmpfs:
+      - /data/logs:mode=1777
+      - /tmp
+    volumes:
+      - ${REPORTS_DIR:-./data/reports}/html:/data/reports/html:ro
+    ports:
+      - "127.0.0.1:${SERVE_PORT:-8765}:8765"   # this host only; put a proxy in front to share it
+    restart: unless-stopped
+
+  # Once a day: scan only if ClinVar (or another pinned database) has a new release.
+  scheduler:
+    <<: *pipeline
+    profiles: ["scheduled"]
+    entrypoint: ["sh", "-c", "while true; do python run.py check-releases; sleep 86400; done"]
+    restart: unless-stopped
+
+  # The zero-data demo: builds the synthetic family's reports in memory and serves them.
+  demo:
+    image: genome-ledger:local
+    build: .
+    platform: linux/amd64
+    profiles: ["demo"]
+    user: "${PUID:-1000}:${PGID:-1000}"
+    tmpfs:
+      - /demo:mode=1777
+    environment:
+      GENOMES_ROOT: /demo
+    entrypoint: ["sh", "-c", "python run.py demo --out-dir /demo && exec python run.py serve --host 0.0.0.0 --port 8765"]
+    ports:
+      - "127.0.0.1:${SERVE_PORT:-8765}:8765"

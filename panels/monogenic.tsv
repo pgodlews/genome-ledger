@@ -1,0 +1,49 @@
+disease	genes	inheritance	note
+Hereditary breast and ovarian cancer	BRCA1,BRCA2	AD
+Li-Fraumeni syndrome	TP53	AD
+Lynch syndrome (HNPCC)	MLH1,MSH2,MSH6,PMS2	AD
+Familial adenomatous polyposis	APC	AD
+MUTYH-associated polyposis	MUTYH	AR
+PTEN hamartoma tumor syndrome	PTEN	AD
+Hereditary diffuse gastric cancer	CDH1	AD
+Von Hippel-Lindau syndrome	VHL	AD
+Multiple endocrine neoplasia type 1	MEN1	AD
+Multiple endocrine neoplasia type 2	RET	AD
+Hereditary paraganglioma-pheochromocytoma	SDHB,SDHC,SDHD,SDHAF2	AD
+Retinoblastoma	RB1	AD
+Tuberous sclerosis	TSC1,TSC2	AD
+Neurofibromatosis type 1	NF1	AD
+Neurofibromatosis type 2	NF2	AD
+Familial hypercholesterolemia	LDLR,APOB,PCSK9	AD
+Hypertrophic cardiomyopathy	MYBPC3,MYH7,TNNT2,TNNI3,TPM1	AD
+Dilated cardiomyopathy	LMNA,TTN	AD
+Arrhythmogenic right ventricular cardiomyopathy	PKP2,DSP,DSG2	AD
+Long QT syndrome	KCNQ1,KCNH2,SCN5A	AD
+Catecholaminergic polymorphic VT	RYR2	AD
+Marfan syndrome	FBN1	AD
+Loeys-Dietz / thoracic aortic aneurysm	TGFBR1,TGFBR2,SMAD3,ACTA2	AD
+Vascular Ehlers-Danlos syndrome	COL3A1	AD
+Hereditary transthyretin amyloidosis	TTR	AD
+Malignant hyperthermia susceptibility	RYR1,CACNA1S	AD
+Wilson disease	ATP7B	AR
+Hereditary hemochromatosis	HFE	AR
+Cystic fibrosis	CFTR	AR
+Sickle cell disease / beta-thalassemia	HBB	AR
+Spinal muscular atrophy	SMN1	AR	mostly SMN1 exon-7 deletion (CNV) — not assessable from SNV calls
+Tay-Sachs disease	HEXA	AR
+Phenylketonuria	PAH	AR
+Gaucher disease	GBA	AR	GBAP1 pseudogene homology can reduce call reliability
+Alpha-1 antitrypsin deficiency	SERPINA1	AR	codominant; PiZ/PiS alleles drive risk
+Classic galactosemia	GALT	AR
+Congenital adrenal hyperplasia	CYP21A2	AR	CYP21A1P pseudogene/CNV — limited SNV assessment
+Pompe disease	GAA	AR
+Usher syndrome	MYO7A,USH2A,CDH23	AR
+Maple syrup urine disease	BCKDHA,BCKDHB,DBT	AR
+Biotinidase deficiency	BTD	AR
+Fabry disease	GLA	XL
+Ornithine transcarbamylase deficiency	OTC	XL
+Duchenne/Becker muscular dystrophy	DMD	XL	often exon-level CNV — SNV calls capture only point variants
+Hemophilia A	F8	XL
+Hemophilia B	F9	XL
+G6PD deficiency	G6PD	XL
+Fragile X syndrome	FMR1	XL	CGG repeat expansion — not assessable from SNV calls

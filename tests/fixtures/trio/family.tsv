@@ -1,0 +1,7 @@
+id	display_name	sex	father	mother	partner
+father	Grandfather	male			mother
+mother	Grandmother	female			father
+daughter	Daughter	female	father	mother	partner
+partner	Partner	male			daughter
+grandson	Grandson	male	partner	daughter	
+granddaughter	Granddaughter	female	partner	daughter	

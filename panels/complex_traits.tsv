@@ -1,0 +1,45 @@
+efo_id	trait	pgs_id	n_variants	metric	metric_kind	eval_n	licence	actionability	s1_gate
+MONDO_0005147	type 1 diabetes mellitus	PGS000024	85	0.921	AUROC	374000	pgs-catalog-default	screen	no
+MONDO_0005130	celiac disease	PGS000040	228	0.9	AUROC	2476	pgs-catalog-default	screen	no
+MONDO_0007915	systemic lupus erythematosus	PGS000328	57	0.83	AUROC	1001	pgs-catalog-default	screen	no
+MONDO_0005010	coronary artery disorder	PGS003446	538084	0.82	AUROC	8417	pgs-catalog-default	treat	no
+MONDO_0005159	prostate carcinoma	PGS003415	268	0.79	C-index	170850	pgs-catalog-default	screen	no
+MONDO_0005291	brain aneurysm	PGS003408	6671269	0.77	C-index	69396	pgs-catalog-default	screen	no
+MONDO_0015486	keratoconus	PGS002292	36	0.756	AUROC	142595	pgs-catalog-default	screen	no
+MONDO_0005148	type 2 diabetes mellitus	PGS003103	945820	0.75	AUROC	8417	pgs-catalog-default	life	no
+EFO_0004340	body mass index	PGS000716	295	0.739	AUROC	3124	pgs-catalog-default	life	no
+MONDO_0005301	multiple sclerosis	PGS002726	476399	0.73	AUROC	253419	pgs-catalog-default	none	yes
+MONDO_0005393	gout	PGS004931	1138	0.73	AUROC	8417	pgs-catalog-default	treat	no
+MONDO_0005044	hypertensive disorder	PGS004934	15056	0.72	AUROC	8417	pgs-catalog-default	treat	no
+MONDO_0004981	atrial fibrillation	PGS004929	178814	0.71	AUROC	8417	pgs-catalog-default	screen	no
+MONDO_0005041	glaucoma	PGS000137	2673	0.71	AUROC	1795	pgs-catalog-default	screen	no
+MONDO_0005350	abdominal aortic aneurysm	PGS003429	831447	0.708	AUROC	91731	pgs-catalog-default	screen	no
+MONDO_0005420	hypothyroidism	PGS004935	6127	0.7	AUROC	8417	pgs-catalog-default	screen	no
+MONDO_0005265	inflammatory bowel disease	PGS000017	6907112	0.69	AUROC	1433	academic-noncommercial	screen	no
+EFO_0006335	systolic blood pressure	PGS002807	1084157	0.69	C-index	4408	pgs-catalog-default	treat	no
+EFO_0004530	triglyceride measurement	PGS004937	8337	0.68	AUROC	8417	pgs-catalog-default	treat	no
+MONDO_0004989	breast carcinoma	PGS000004	313	0.673	C-index	6522	pgs-catalog-default	screen	no
+EFO_0004531	urate measurement	PGS000126	114	0.67	AUROC	334880	pgs-catalog-default	treat	no
+MONDO_0005399	venous thromboembolism	PGS000043	297	0.67	C-index	29663	pgs-catalog-default	treat	no
+EFO_0004611	low density lipoprotein cholesterol measurement	PGS000875	36	0.67	AUROC	4787	pgs-catalog-default	treat	no
+MONDO_0004979	asthma	PGS002727	985837	0.66	AUROC	391820	pgs-catalog-default	treat	no
+MONDO_0011429	juvenile idiopathic arthritis	PGS000114	26	0.657	AUROC	3513	pgs-catalog-default	screen	no
+MONDO_0005012	cutaneous melanoma	PGS019946	7280842	0.643	C-index	16282	pgs-catalog-default	screen	no
+EFO_0003913	angina pectoris	PGS012540	969769	0.64	AUROC	122892	pgs-catalog-default	treat	no
+OBA_1000968	vitamin D level	PGS000882	1094650	0.63	AUROC	8417	pgs-catalog-default	treat	no
+MONDO_0005140	ovarian carcinoma	PGS002250	27240	0.624	AUROC	12337	pgs-catalog-default	screen	no
+MONDO_0020804	basal cell carcinoma	PGS000730	47	0.624	AUROC	88924	CC-BY-4.0	screen	no
+MONDO_0005252	heart failure	PGS012544	969507	0.62	AUROC	122892	pgs-catalog-default	treat	no
+MONDO_0005386	peripheral arterial disease	PGS012546	969771	0.62	AUROC	122892	pgs-catalog-default	treat	no
+MONDO_0005138	lung carcinoma	PGS004691	950353	0.618	AUROC	40850	pgs-catalog-default	screen	yes
+HP_0002140	Ischemic stroke	PGS012545	969253	0.6	AUROC	122892	pgs-catalog-default	treat	no
+MONDO_0005133	endometriosis	PGS003447	14	0.6	AUROC	257380	pgs-catalog-default	screen	no
+EFO_0004612	high density lipoprotein cholesterol measurement	PGS004932	17151	0.6	AUROC	8417	pgs-catalog-default	life	no
+MONDO_0005098	stroke disorder	PGS000039	3225583	0.582	AUROC	12792	pgs-catalog-default	treat	no
+MONDO_0005300	chronic kidney disease	PGS012543	969768	0.58	AUROC	122892	pgs-catalog-default	screen	no
+MONDO_0005575	colorectal cancer	PGS000149	41	0.57	C-index	361543	pgs-catalog-default	screen	no
+MONDO_0005101	ulcerative colitis	PGS002066	566637	0.57	AUROC	8417	pgs-catalog-default	screen	no
+MONDO_0005206	renal carcinoma	PGS004690	6351669	0.564	AUROC	40841	pgs-catalog-default	none	yes
+MONDO_0002447	endometrial carcinoma	PGS002735	19	0.56	AUROC	118636	pgs-catalog-default	screen	no
+MONDO_0004986	urinary bladder carcinoma	PGS004687	1077775	0.558	AUROC	40771	pgs-catalog-default	none	yes
+MONDO_0005192	exocrine pancreatic carcinoma	PGS004693	6351686	0.543	AUROC	40877	pgs-catalog-default	none	yes

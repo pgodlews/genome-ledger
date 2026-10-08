@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Weekly check for new database releases; runs a full scan only when ClinVar
+  (or another pinned DB) has actually changed. Fires on next wake if the Mac
+  was asleep at the scheduled time.
+
+  launchd starts jobs with PATH=/usr/bin:/bin:/usr/sbin:/sbin — it does NOT read your shell
+  profile. Every external tool the scan shells out to (tabix and bgzip in create_snapshot,
+  bcftools and tabix in the incremental subset extract, and the ones VEP itself calls to read
+  its custom-annotation VCF) lives in Homebrew's prefix, so without the block below the
+  job dies at the first require_tools() with "Missing required tool(s): tabix, bgzip".
+
+  Install:
+    1. Edit WorkingDirectory + the python path below to match your machine.
+       On Intel Macs, Homebrew is /usr/local/bin rather than /opt/homebrew/bin.
+    2. mkdir -p ~/genomes/logs      (launchd silently drops output if the dir is missing)
+    3. cp launchd/com.example.genomeledger.plist ~/Library/LaunchAgents/
+    4. launchctl load ~/Library/LaunchAgents/com.example.genomeledger.plist
+    5. launchctl list | grep genomeledger     (confirm it is actually registered)
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.example.genomeledger</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/path/to/genome-ledger/.venv/bin/python</string>
+        <string>/path/to/genome-ledger/run.py</string>
+        <string>check-releases</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/path/to/genome-ledger</string>
+
+    <!-- Homebrew first: tabix/bgzip/bcftools/samtools/uv all live there. -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+
+    <!-- Weekly: Mondays at 09:00 (ClinVar publishes weekly). -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Weekday</key><integer>1</integer>
+        <key>Hour</key><integer>9</integer>
+        <key>Minute</key><integer>0</integer>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/path/to/genomes/logs/launchd.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/path/to/genomes/logs/launchd.err.log</string>
+</dict>
+</plist>

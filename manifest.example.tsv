@@ -1,0 +1,4 @@
+sample	vendor_id	relation	sex
+child	SAMPLE001	child	female
+father	SAMPLE002	father	male
+mother	SAMPLE003	mother	female

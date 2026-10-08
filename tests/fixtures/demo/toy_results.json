@@ -1,0 +1,71 @@
+{
+  "_about": "Bundled SAMPLE RESULTS for `run.py demo`. The demo family is synthetic and has no sequencing reads, so the tools that normally produce these values (ExpansionHunter, PharmCAT, Haplogrep, Yleaf, PGS Catalog scoring against 1000 Genomes) are not run. pipeline/demo.py writes these values out in each tool's own output format and passes them through the pipeline's real parsing, interpretation, consent and report code. They were written by hand to be plausible and to follow inheritance within the family; they are not derived from the demo VCFs and describe no real person.",
+
+  "repeats": {
+    "loci": {
+      "HTT": "CAG", "FMR1": "CGG", "C9ORF72": "GGCCCC", "DMPK": "CAG", "FXN": "GAA",
+      "AR": "GCA", "ATXN1": "TGC", "ATXN2": "GCT", "ATXN3": "GCT", "ATXN7": "GCA",
+      "CACNA1A": "CTG", "TBP": "GCA", "ATN1": "CAG", "RFC1": "AARRG"
+    },
+    "sizes": {
+      "father":        {"HTT": [17, 19], "FMR1": [30],     "C9ORF72": [2, 8], "DMPK": [5, 13],  "FXN": [9, 12],  "AR": [22],     "ATXN1": [29, 30], "ATXN2": [22, 22], "ATXN3": [14, 23], "ATXN7": [10, 12], "CACNA1A": [11, 13], "TBP": [36, 38], "ATN1": [15, 17], "RFC1": [11, 11]},
+      "mother":        {"HTT": [15, 21], "FMR1": [29, 58], "C9ORF72": [2, 5], "DMPK": [11, 12], "FXN": [8, 9],   "AR": [20, 24], "ATXN1": [28, 31], "ATXN2": [22, 23], "ATXN3": [21, 27], "ATXN7": [10, 10], "CACNA1A": [7, 12],  "TBP": [35, 37], "ATN1": [12, 16], "RFC1": [11, 12]},
+      "daughter":      {"HTT": [17, 21], "FMR1": [30, 61], "C9ORF72": [2, 2], "DMPK": [5, 12],  "FXN": [9, 9],   "AR": [22, 24], "ATXN1": [29, 31], "ATXN2": [22, 22], "ATXN3": [14, 27], "ATXN7": [10, 12], "CACNA1A": [12, 13], "TBP": [36, 37], "ATN1": [15, 16], "RFC1": [11, 11]},
+      "partner":       {"HTT": [18, 20], "FMR1": [31],     "C9ORF72": [5, 8], "DMPK": [12, 14], "FXN": [10, 14], "AR": [25],     "ATXN1": [30, 30], "ATXN2": [22, 22], "ATXN3": [23, 24], "ATXN7": [10, 11], "CACNA1A": [11, 11], "TBP": [37, 38], "ATN1": [14, 18], "RFC1": [11, 13]},
+      "grandson":      {"HTT": [17, 18], "FMR1": [64],     "C9ORF72": [2, 5], "DMPK": [12, 12], "FXN": [9, 10],  "AR": [24],     "ATXN1": [29, 30], "ATXN2": [22, 22], "ATXN3": [14, 23], "ATXN7": [10, 10], "CACNA1A": [11, 13], "TBP": [36, 37], "ATN1": [15, 18], "RFC1": [11, 11]},
+      "granddaughter": {"HTT": [20, 21], "FMR1": [30, 31], "C9ORF72": [2, 8], "DMPK": [5, 14],  "FXN": [9, 14],  "AR": [22, 25], "ATXN1": [30, 31], "ATXN2": [22, 22], "ATXN3": [24, 27], "ATXN7": [11, 12], "CACNA1A": [11, 12], "TBP": [37, 38], "ATN1": [14, 16], "RFC1": [11, 13]}
+    }
+  },
+
+  "pgx": {
+    "pharmcatVersion": "demo", "dataVersion": "demo",
+    "phenotypes": {
+      "CYP2C19": {"*1/*1": "Normal Metabolizer", "*1/*2": "Intermediate Metabolizer", "*1/*17": "Rapid Metabolizer", "*2/*17": "Intermediate Metabolizer"},
+      "CYP2C9":  {"*1/*1": "Normal Metabolizer", "*1/*2": "Intermediate Metabolizer"},
+      "CYP3A5":  {"*3/*3": "Poor Metabolizer", "*1/*3": "Intermediate Metabolizer"},
+      "DPYD":    {"Reference/Reference": "Normal Metabolizer"},
+      "SLCO1B1": {"*1/*1": "Normal Function", "*1/*5": "Decreased Function"},
+      "TPMT":    {"*1/*1": "Normal Metabolizer", "*1/*3A": "Intermediate Metabolizer"},
+      "UGT1A1":  {"*1/*1": "Normal Metabolizer", "*1/*28": "Intermediate Metabolizer", "*28/*28": "Poor Metabolizer"},
+      "VKORC1":  {"rs9923231 reference (C)/rs9923231 reference (C)": "Normal warfarin sensitivity", "rs9923231 reference (C)/rs9923231 variant (T)": "Increased warfarin sensitivity"}
+    },
+    "diplotypes": {
+      "father":        {"CYP2C19": "*1/*2",  "CYP2C9": "*1/*1", "CYP3A5": "*3/*3", "DPYD": "Reference/Reference", "SLCO1B1": "*1/*5", "TPMT": "*1/*1",  "UGT1A1": "*1/*28",  "VKORC1": "rs9923231 reference (C)/rs9923231 reference (C)"},
+      "mother":        {"CYP2C19": "*1/*17", "CYP2C9": "*1/*2", "CYP3A5": "*1/*3", "DPYD": "Reference/Reference", "SLCO1B1": "*1/*1", "TPMT": "*1/*3A", "UGT1A1": "*1/*28",  "VKORC1": "rs9923231 reference (C)/rs9923231 variant (T)"},
+      "daughter":      {"CYP2C19": "*2/*17", "CYP2C9": "*1/*2", "CYP3A5": "*3/*3", "DPYD": "Reference/Reference", "SLCO1B1": "*1/*5", "TPMT": "*1/*1",  "UGT1A1": "*28/*28", "VKORC1": "rs9923231 reference (C)/rs9923231 variant (T)"},
+      "partner":       {"CYP2C19": "*1/*1",  "CYP2C9": "*1/*1", "CYP3A5": "*3/*3", "DPYD": "Reference/Reference", "SLCO1B1": "*1/*1", "TPMT": "*1/*1",  "UGT1A1": "*1/*1",   "VKORC1": "rs9923231 reference (C)/rs9923231 reference (C)"},
+      "grandson":      {"CYP2C19": "*1/*2",  "CYP2C9": "*1/*1", "CYP3A5": "*3/*3", "DPYD": "Reference/Reference", "SLCO1B1": "*1/*5", "TPMT": "*1/*1",  "UGT1A1": "*1/*28",  "VKORC1": "rs9923231 reference (C)/rs9923231 reference (C)"},
+      "granddaughter": {"CYP2C19": "*1/*17", "CYP2C9": "*1/*2", "CYP3A5": "*3/*3", "DPYD": "Reference/Reference", "SLCO1B1": "*1/*1", "TPMT": "*1/*1",  "UGT1A1": "*1/*28",  "VKORC1": "rs9923231 reference (C)/rs9923231 variant (T)"}
+    }
+  },
+
+  "haplogroups": {
+    "father":        {"mt": ["U5b1b1", "0.9412"], "y": ["R-L21", "0.981"]},
+    "mother":        {"mt": ["H1a1", "0.9630"]},
+    "daughter":      {"mt": ["H1a1", "0.9630"]},
+    "partner":       {"mt": ["J1c2", "0.9285"],   "y": ["I-M253", "0.974"]},
+    "grandson":      {"mt": ["H1a1", "0.9630"],   "y": ["I-M253", "0.974"]},
+    "granddaughter": {"mt": ["H1a1", "0.9630"]}
+  },
+
+  "prs": {
+    "traits": {
+      "PGS000024": {"mean": 4.10,  "sd": 0.62},
+      "PGS000040": {"mean": 9.85,  "sd": 1.40},
+      "PGS000004": {"mean": -0.42, "sd": 0.55},
+      "PGS003446": {"mean": 0.031, "sd": 0.012},
+      "PGS000875": {"mean": 0.88,  "sd": 0.21},
+      "PGS000716": {"mean": 1.94,  "sd": 0.33},
+      "PGS003103": {"mean": 0.56,  "sd": 0.09},
+      "PGS002726": {"mean": 0.012, "sd": 0.004}
+    },
+    "eur_percentile": {
+      "father":        {"PGS000024": 34, "PGS000040": 71, "PGS000004": 48, "PGS003446": 86, "PGS000875": 91, "PGS000716": 62, "PGS003103": 77, "PGS002726": 41},
+      "mother":        {"PGS000024": 58, "PGS000040": 22, "PGS000004": 66, "PGS003446": 39, "PGS000875": 30, "PGS000716": 45, "PGS003103": 52, "PGS002726": 68},
+      "daughter":      {"PGS000024": 47, "PGS000040": 49, "PGS000004": 59, "PGS003446": 70, "PGS000875": 74, "PGS000716": 51, "PGS003103": 69, "PGS002726": 57},
+      "partner":       {"PGS000024": 81, "PGS000040": 15, "PGS000004": 37, "PGS003446": 28, "PGS000875": 44, "PGS000716": 83, "PGS003103": 60, "PGS002726": 19},
+      "grandson":      {"PGS000024": 66, "PGS000040": 31, "PGS000004": 50, "PGS003446": 55, "PGS000875": 63, "PGS000716": 72, "PGS003103": 64, "PGS002726": 35},
+      "granddaughter": {"PGS000024": 60, "PGS000040": 38, "PGS000004": 44, "PGS003446": 47, "PGS000875": 52, "PGS000716": 65, "PGS003103": 58, "PGS002726": 43}
+    }
+  }
+}

@@ -1,0 +1,16 @@
+trait	rsid	chrom	pos	ref	effect	interp0	interp1	interp2	note
+Lactose digestion (adult)	rs4988235	2	135851076	G	A	Likely lactose intolerant as an adult (no persistence allele)	Lactase persistent — can digest lactose	Lactase persistent — can digest lactose	LCT/MCM6 -13910; effect allele dominant
+Earwax type & body odor	rs17822931	16	48224287	C	T	Wet earwax; typical body odor	Wet earwax; typical body odor	Dry earwax; reduced body odor	ABCC11
+Factor V Leiden (thrombophilia)	rs6025	1	169549811	C	T	Normal — no Factor V Leiden variant	Heterozygous Factor V Leiden — increased venous thrombosis risk	Homozygous Factor V Leiden — high venous thrombosis risk	F5 R506Q; actionable — confirm clinically
+Prothrombin G20210A (thrombophilia)	rs1799963	11	46739505	G	A	Normal	Heterozygous prothrombin G20210A — increased thrombosis risk	Homozygous prothrombin G20210A — increased thrombosis risk	F2; actionable — confirm clinically
+MTHFR C677T	rs1801133	1	11796321	G	A	Normal MTHFR enzyme activity	Intermediate MTHFR activity (one 677T)	Reduced MTHFR activity (677T/T)	folate metabolism; mild effect
+Caffeine metabolism	rs762551	15	74749576	C	A	Slow caffeine metabolizer	Intermediate caffeine metabolizer	Fast caffeine metabolizer	CYP1A2
+Alcohol flush reaction	rs671	12	111803962	G	A	No ALDH2 deficiency — typical alcohol metabolism	ALDH2 deficiency — alcohol flush reaction	Severe ALDH2 deficiency — strong alcohol flush	ALDH2*2 (Glu504Lys)
+Eye colour (blue vs brown)	rs12913832	15	28120472	A	G	Brown eyes likely	Intermediate (green/hazel) likely	Blue eyes likely	HERC2/OCA2; single-SNP approximation
+Muscle fibre type (ACTN3)	rs1815739	11	66560624	C	T	Two functional ACTN3 copies — power/sprint-associated	One functional ACTN3 copy	No functional ACTN3 — endurance-leaning	R577X
+Secretor status / norovirus resistance	rs601338	19	48703417	G	A	Secretor — susceptible to common norovirus strains	Secretor (carrier of non-secretor allele)	Non-secretor — resistant to common norovirus strains	FUT2 W143X
+Nicotine dependence (if you smoke)	rs16969968	15	78590583	G	A	Lower nicotine-dependence risk	Moderately increased nicotine dependence	Higher nicotine dependence	CHRNA5 Asp398Asn
+Cilantro/coriander taste	rs72921001	11	6868417	C	C	Less likely to perceive cilantro as soapy	Intermediate	More likely to perceive cilantro/coriander as soapy	OR6A2
+Vitamin D level	rs2282679	4	71742666	T	G	Typical vitamin D levels	Somewhat lower vitamin D (one copy)	Lower vitamin D — consider monitoring/supplementation	GC (vitamin-D-binding protein)
+Omega-3 conversion efficiency	rs174537	11	61785208	G	T	Efficient converter of plant omega-3 (ALA→EPA/DHA)	Intermediate omega-3 conversion	Reduced conversion — benefits more from direct EPA/DHA (fish/algae)	FADS1
+Caffeine sensitivity (anxiety/sleep)	rs5751876	22	24441333	T	T	Lower caffeine sensitivity	Intermediate caffeine sensitivity	Higher caffeine sensitivity — more anxiety/sleep disruption	ADORA2A; direction approximate

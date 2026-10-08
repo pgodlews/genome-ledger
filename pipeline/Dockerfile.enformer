@@ -1,0 +1,11 @@
+# Enformer variant-effect worker image (the `interpret` stage, INTERPRET_MODEL=enformer).
+# enformer-pytorch pulls a newer torch (2.12+cu13) whose wheel bundles its own CUDA runtime —
+# works on the 3090s under driver 595 regardless of the base image's CUDA. The base image's
+# torchvision is ABI-mismatched and unused, so we drop it. Build context must contain
+# interpret_worker.py (it lives beside this file in pipeline/).
+#   docker build -f pipeline/Dockerfile.enformer -t enformer-worker:latest pipeline/
+FROM pytorch/pytorch:2.3.1-cuda12.1-cudnn8-runtime
+RUN pip install --no-cache-dir enformer-pytorch && pip uninstall -y torchvision || true
+COPY interpret_worker.py /opt/interpret_worker.py
+ENV HF_HOME=/cache/hf
+ENTRYPOINT ["python", "/opt/interpret_worker.py"]

@@ -1,0 +1,7 @@
+sample_id	vendor_id	relationship	sex	raw_path
+father	DEMO_FATHER	father	male	tests/fixtures/trio/father.vcf.gz
+mother	DEMO_MOTHER	mother	female	tests/fixtures/trio/mother.vcf.gz
+daughter	DEMO_DAUGHTER	daughter	female	tests/fixtures/trio/daughter.vcf.gz
+partner	DEMO_PARTNER	partner	male	tests/fixtures/trio/partner.vcf.gz
+grandson	DEMO_GRANDSON	grandson	male	tests/fixtures/trio/grandson.vcf.gz
+granddaughter	DEMO_GRANDDAUGHTER	granddaughter	female	tests/fixtures/trio/granddaughter.vcf.gz

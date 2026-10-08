@@ -1,0 +1,14 @@
+gene	chrom	start	end	disease	mechanism
+BRCA1	17	43044295	43125483	Hereditary breast and ovarian cancer	large exon-level deletions/duplications are a known BRCA1 mechanism
+BRCA2	13	32315086	32400268	Hereditary breast and ovarian cancer	exon-level rearrangements
+MLH1	3	36993332	37050896	Lynch syndrome	exon deletions
+MSH2	2	47403067	47634501	Lynch syndrome	exon deletions (incl. EPCAM-MSH2)
+MSH6	2	47783145	47806101	Lynch syndrome	exon deletions
+PMS2	7	5970925	6009106	Lynch syndrome	exon deletions (pseudogene-confounded region)
+TP53	17	7668421	7687490	Li-Fraumeni syndrome	whole/partial gene deletions
+SMN1	5	70924941	70953015	Spinal muscular atrophy	exon-7 deletion is the dominant mechanism (CNV) — Manta DEL is a screen, MLPA confirms
+DMD	X	31097677	33339609	Duchenne/Becker muscular dystrophy	~70% of cases are exon-level deletions/duplications
+CYP21A2	6	32038415	32041670	Congenital adrenal hyperplasia	deletions/conversions with the CYP21A1P pseudogene
+PMP22	17	15229777	15265326	Charcot-Marie-Tooth 1A / HNPP	1.4 Mb dup (CMT1A) vs deletion (HNPP) — a classic CNV disorder
+NF1	17	31094927	31382116	Neurofibromatosis type 1	whole-gene and exon deletions
+PKD1	16	2088708	2135898	Autosomal dominant polycystic kidney disease	large rearrangements

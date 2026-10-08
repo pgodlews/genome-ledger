@@ -1,0 +1,11 @@
+# Borzoi variant-effect worker image (the `interpret` stage, INTERPRET_MODEL=borzoi).
+# Separate image from enformer-worker: enformer-pytorch pulls torch 2.12 (cu13), which breaks
+# Borzoi's HF weight load (meta-tensor on .to()); Borzoi is proven on the base image's torch
+# 2.3.1, so we keep borzoi-pytorch alone here. The worker script is shared — it imports
+# borzoi_pytorch only in the --model borzoi branch. Build context must contain interpret_worker.py.
+#   docker build -f pipeline/Dockerfile.borzoi -t borzoi-worker:latest pipeline/
+FROM pytorch/pytorch:2.3.1-cuda12.1-cudnn8-runtime
+RUN pip install --no-cache-dir borzoi-pytorch && pip uninstall -y torchvision || true
+COPY interpret_worker.py /opt/interpret_worker.py
+ENV HF_HOME=/cache/hf
+ENTRYPOINT ["python", "/opt/interpret_worker.py"]

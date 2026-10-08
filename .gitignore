@@ -1,0 +1,84 @@
+# --- Genomic DATA never enters version control (privacy + size) -------------
+# The working data root is ~/genomes (outside the repo) by default. These rules
+# are a safety net in case anyone points GENOMES_ROOT inside the repo.
+# Every path config.py puts under GENOMES_ROOT must be covered here — the test
+# `test_gitignore_covers_data_root` derives the list from config.py and fails on a gap.
+genomes/
+# Names, relationships and disclosure decisions (family.tsv, consent.tsv).
+family/
+incoming/
+aligned/
+called/
+pgx/
+ancestry/
+prs/
+hla/
+repeats/
+mito/
+sv/
+callable/
+hla_typing/
+denovo/
+segregation/
+phase/
+share/
+forcecalled/
+interpret/
+logs/
+tools/
+# Per-sample trait results land in traits/<sample>/; traits/traits.tsv is the tracked panel.
+/traits/*
+!/traits/traits.tsv
+raw/
+normalized/
+annotated/
+vep_cache/
+refs/
+db/snapshots/
+duckdb/
+reports/
+pedigree.ped
+manifest/
+.notify_key
+*.vcf
+*.vcf.gz
+*.vcf.gz.tbi
+*.vcf.gz.csi
+*.bcf
+*.bam
+*.bam.bai
+*.cram
+*.cram.crai
+*.fq.gz
+*.fastq.gz
+*.fa
+*.fa.fai
+*.dict
+*.duckdb
+
+# Allow test fixtures
+!tests/fixtures/**
+
+# --- macOS -------------------------------------------------------------------
+.DS_Store
+
+# --- Python ------------------------------------------------------------------
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+.venv
+.python-version
+
+# --- Local & Experimental Assets ---------------------------------------------
+poc/
+assets/
+
+# --- Demo output (run.py demo) -------------------------------------------------
+demo_output/
+
+# --- Docker Compose (compose.yaml) -----------------------------------------------
+data/
+.env
