@@ -86,9 +86,33 @@ def epoch():
         return {}
 
 
+# The long table reaches ~1,100 rows per scored variant (CHIP_TF alone is ~900), so a family
+# run is millions of rows. Parse it once per process, index it by variant, and re-read only
+# when the file or the epoch changes. Later rows win for a duplicate key.
+_cache = {'sig': None, 'rows': [], 'by_key': {}}
+
+
 def current_rows():
+    path = config.ALPHAGENOME_LONG_FILE
     eid = epoch().get('id')
-    return [r for r in read_tsv(config.ALPHAGENOME_LONG_FILE) if eid and r['epoch'] == eid]
+    try:
+        st = path.stat()
+    except FileNotFoundError:
+        return []
+    sig = (str(path), st.st_mtime_ns, st.st_size, eid)
+    if _cache['sig'] != sig:
+        latest = {}
+        if eid:
+            for r in read_tsv(path):
+                # A crash mid-append can leave one short last line: skip it.
+                if r.get('epoch') == eid and r.get('raw_score') not in (None, ''):
+                    latest[_row_key(r)] = r
+        rows = list(latest.values())
+        by_key = {}
+        for r in rows:
+            by_key.setdefault(key(r), []).append(r)
+        _cache.update(sig=sig, rows=rows, by_key=by_key)
+    return _cache['rows']
 
 
 def summary(rows, gene):
@@ -104,7 +128,8 @@ def summary(rows, gene):
 
 def evidence(chrom, pos, ref, alt, gene=None):
     target = (str(chrom).removeprefix('chr'), int(pos), ref, alt)
-    rows = [r for r in current_rows() if key(r) == target]
+    current_rows()
+    rows = list(_cache['by_key'].get(target, []))
     if gene:
         condition = conditions_for(gene)[0]['condition']
         rows = [r for r in rows if r['condition'] == condition]
@@ -224,9 +249,25 @@ def _row_key(r):
 
 
 def merge(rows):
-    existing = {_row_key(r): r for r in read_tsv(config.ALPHAGENOME_LONG_FILE)}
-    existing.update({_row_key(r): r for r in rows})
-    _write_tsv(config.ALPHAGENOME_LONG_FILE, existing.values(), LONG_COLS)
+    """Append scored rows. Rewriting the whole table per variant was quadratic in run size;
+    appending is safe because a (variant, condition, epoch) is only scored once, and
+    current_rows() collapses any duplicate key to its latest row."""
+    path = config.ALPHAGENOME_LONG_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    new = not path.exists() or path.stat().st_size == 0
+    torn = False
+    if not new:
+        with path.open('rb') as f:
+            f.seek(-1, os.SEEK_END)
+            torn = f.read(1) != b'\n'
+    with path.open('a', newline='') as f:
+        if torn:
+            f.write('\n')   # a crash left a partial line: never glue new rows onto it
+        w = csv.DictWriter(f, LONG_COLS, delimiter='\t', extrasaction='ignore')
+        if new:
+            w.writeheader()
+        w.writerows(rows)
+        f.flush(); os.fsync(f.fileno())
 
 
 def _sentinel_values(rows):

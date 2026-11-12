@@ -2203,6 +2203,25 @@ def test_alphagenome2() -> None:
               hit is not None and abs(hit[0] - 0.8) < 1e-9 and hit[3] == "RNA_SEQ:mammary epithelium")
         eid1 = ag.epoch()["id"]
 
+        # --- long table: append-only writes, cached + deduplicated reads -----------------
+        size0 = config.ALPHAGENOME_LONG_FILE.stat().st_size
+        n0 = len(ag.current_rows())
+        dup = [dict(r) for r in ag.current_rows() if int(r["pos"]) == A["pos"]][:1]
+        dup[0]["raw_score"] = "-0.9"
+        ag.merge(dup)
+        check("merge appends instead of rewriting", config.ALPHAGENOME_LONG_FILE.stat().st_size > size0)
+        check("a duplicate key collapses to one row", len(ag.current_rows()) == n0)
+        check("...and the later row wins",
+              any(r["raw_score"] == "-0.9" for r in ag.evidence("17", A["pos"], "C", "T")))
+        with config.ALPHAGENOME_LONG_FILE.open("a") as fh:
+            fh.write("17\t43100000\tC")          # a crash mid-append: short last line
+        check("a truncated last line is skipped", len(ag.current_rows()) == n0)
+        dup[0]["raw_score"] = "-0.8"
+        ag.merge(dup)                                 # restore the original value for later checks
+        check("an append after a torn line starts on a new line",
+              any(r["raw_score"] == "-0.8" for r in ag.evidence("17", A["pos"], "C", "T"))
+              and not any(r["raw_score"] == "-0.9" for r in ag.evidence("17", A["pos"], "C", "T")))
+
         # --- epoch canary -------------------------------------------------------------------
         fake.calls.clear()
         ag.score_selected("snap", [A])
@@ -2215,7 +2234,7 @@ def test_alphagenome2() -> None:
         check("changed sentinels start a new epoch", eid2 != eid1 and ag.epoch()["previous_epoch"] == eid1)
         check("old-epoch rows are rescored", len(moved.calls) == n_sent + 1)
         check("old rows retained in the long table",
-              {r["epoch"] for r in read_tsv(config.ALPHAGENOME_LONG_FILE)} == {eid1, eid2})
+              {r["epoch"] for r in read_tsv(config.ALPHAGENOME_LONG_FILE) if r.get("epoch")} == {eid1, eid2})
         em._table = None
         check("summary follows the new epoch", abs(em.lookup("17", A["pos"], "C", "T")[0] - 0.7) < 1e-9)
 
