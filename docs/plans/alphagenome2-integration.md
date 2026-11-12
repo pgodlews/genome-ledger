@@ -337,16 +337,34 @@ has a compatible phenotype, but no second coding hit.
 
 Fill this in before starting Phase 1.
 
+Measured 2026-11-12 against the live service with `alphagenome` 2.0.0, using public
+variants only (the scoring-tutorial variant chr2:219243701 C>T, and the five sentinels).
+
 | Question | Answer |
 |---|---|
-| Chromosome naming and assembly | |
-| Conditions available for the panel's tissues | |
-| Scorers that return rows, and which have quantiles | |
-| Shape of gene-level tidy output | |
-| Latency per call, quota, quota error | |
-| Determinism and tolerance | |
-| Largest scorable indel | |
-| Terms confirmed | |
+| Chromosome naming and assembly | `chr` prefix required: bare `"2"` fails with `INVALID_ARGUMENT: Unrecognized chromosome '2' for organism`. GRCh38; no assembly parameter. The client adds `chr` and strips it on the way back. |
+| Conditions available for the panel's tissues | `supported_conditions()` returns 2,799 conditions. RNA-seq is `observed` for 306, `imputed_supported` for 2,183, `imputed_exploratory` for 310. Every panel gene is mapped in `panels/gene_tissue.tsv` (85 CURIEs, all present in the list and all parse with `from_curies`); the rationale column records the RNA status and any proxy choice. PMP22's Schwann-cell condition is `imputed_exploratory`. |
+| Scorers that return rows, and which have quantiles | `RNA_SEQ`, `CAGE`, `DNASE`, `CHIP_TF`, `SPLICE_SITES`, `SPLICE_SITE_USAGE`, `SPLICE_JUNCTIONS` return tidy rows. `POLYADENYLATION` returns an AnnData but no tidy rows, so it is not requested. No scorer returns `quantile_score`: v2 gives `raw_score` only (quantiles exist in AlphaGenome 1 only), which is why bands need `interpret --calibrate`. |
+| Shape of gene-level tidy output | One row per gene per track. Gene: `gene_id` (Ensembl), `gene_name`; track: `track_name`, plus `imputation_mode`, `biosample_curie`, `biosample_name`. `RNA_SEQ` returned 73 genes × 5 tracks for one variant in one condition; splice junction rows add `junction_Start`/`junction_End`. |
+| Latency per call, quota, quota error | ~1.5 s per 1 Mb call with 8 scorers. No quota was hit. No published limit: DeepMind's community answer says quotas are heuristic and change with demand. The client backs off on `RESOURCE_EXHAUSTED`, `UNAVAILABLE` and `DEADLINE_EXCEEDED`, then stops cleanly and keeps what it scored. |
+| Determinism and tolerance | Two identical calls were bit-identical (max difference 0). The epoch canary uses rel 1e-6 / abs 1e-7. |
+| Largest scorable indel | 5 kb and 50 kb deletions and duplications are accepted by `score_variant` when passed as full reference/alternate bases (~1.6–2.0 s each). Larger events were not tried; Phase 6 caps at 50 kb. This sends sequence, not just coordinates. |
+| Terms confirmed | Terms and Output Terms read 2026-11-12: outputs are for non-commercial use, must not train models that predict variant effects, and must not be used for clinical purposes or relied on as medical advice. Storing outputs locally is not forbidden. Publishing or distributing outputs requires conspicuous notice that they are subject to the Output Terms, so every AlphaGenome-bearing report carries that link. |
+
+### Implementation notes (deviations from the plan)
+
+- The long-table key also includes `gene_id`, `junction_start` and `junction_end`.
+  Without them, splice-junction rows for one gene and track would overwrite each other.
+- The summary metric is the largest absolute own-gene `RNA_SEQ` value across that
+  condition's RNA tracks (one gene, one tissue, one scorer), with the `DNASE` fallback.
+- Uncalibrated alphagenome2 scores band as `low` and add no triage weight. Raw scores have
+  no validated cut-off, so bands appear only after `interpret --calibrate` for the current
+  epoch. A calibration from an older epoch is ignored.
+- Phase 6 consent: SVs are not in DuckDB, so carriers among relatives cannot be listed.
+  SV scoring therefore needs `external_scoring` from every sequenced person in
+  `samples.tsv`, which fails closed.
+- Phase 3 phenotype compatibility is not recorded anywhere in the pipeline. The second-hit
+  report says so and leaves it to human review.
 
 ## 10. Out of scope
 

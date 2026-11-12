@@ -225,6 +225,13 @@ def diff(prev: str, curr: str) -> tuple[Path, int, str]:
     con = connect()
     findings = score_pair(con, prev, curr)
     _persist(con, prev, curr, findings)
+    model_changes = con.execute("""
+        SELECT p.chrom,p.pos,p.ref,p.alt,p.model_band,c.model_band,p.model_epoch,c.model_epoch
+        FROM variant_history p JOIN variant_history c USING (chrom,pos,ref,alt)
+        WHERE p.snapshot_id=? AND c.snapshot_id=?
+          AND p.model_epoch IS NOT NULL AND c.model_epoch IS NOT NULL
+          AND p.model_epoch != c.model_epoch AND p.model_band != c.model_band
+    """, [prev,curr]).fetchall()
     con.close()
 
     # Sort: tier (actionable first), then score desc, then review stars desc.
@@ -296,6 +303,13 @@ def diff(prev: str, curr: str) -> tuple[Path, int, str]:
     lines += ["", "_🔴 actionable now · 🟠 monitor · ⚪ log only · score = weighted triage "
               "(ACMG · model · rarity · stability · gene); ★ = current ClinVar review "
               "confidence. Ignored changes are persisted in `triage_results`, not shown._", ""]
+    if model_changes:
+        lines += ["", "## Model-driven changes (log only)", "",
+                  "Model-predicted band changes following an AlphaGenome epoch change; "
+                  "ranked below database reclassifications, never actionable on their own.", "",
+                  "| Variant | Previous band / epoch | Current band / epoch |", "|---|---|---|"]
+        lines += [f"| {c}:{p} {r}>{a} | {pb} / {pe} | {cb} / {ce} |"
+                  for c,p,r,a,pb,cb,pe,ce in model_changes]
     lines += limitations.render(curr, report_kind="delta")
     write_report(path, lines)
     log.info("DELTA report: %s (%d triaged, %d actionable, %d monitor)",

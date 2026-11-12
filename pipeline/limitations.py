@@ -53,6 +53,12 @@ def render(snapshot_id: str, report_kind: str = "full", sample: str | None = Non
     except Exception:  # noqa: BLE001
         n_genes = 0
 
+    ag_notes = []
+    if config.INTERPRET_MODEL == "alphagenome2":
+        from .alphagenome_client import TERMS
+        ag_notes = ["- **AlphaGenome 2:** " + TERMS,
+                    "- Tissue conditions may be imputed or proxies; uncalibrated scores do not add triage weight."]
+
     lines = [
         "## Assumptions & Known Limitations",
         "",
@@ -69,6 +75,7 @@ def render(snapshot_id: str, report_kind: str = "full", sample: str | None = Non
         f"SpliceAI {_on(have_sa)} (splice only) · {config.INTERPRET_MODEL} non-coding "
         f"regulatory {_on(have_en)}{calib} (~{config.ENFORMER_SEQ_LEN:,} bp context; cannot "
         "speak to coding-sequence consequence). Scores are predictions, not measurements.",
+        *ag_notes,
         f"- **ACMG scope:** reasoned classification covers coding/splice variants in the "
         f"{n_genes} monogenic-panel genes only; non-panel and non-coding variants are not "
         "ACMG-classified.",

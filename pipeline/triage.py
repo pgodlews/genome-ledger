@@ -126,7 +126,7 @@ def _f_model(am, sa, en, ref, alt) -> float:
     if sa:  # SpliceAI delta 0–1 → ramp from the recommended cut-off (keep in sync w/ config)
         cut = config.SPLICEAI_DS_RECOMMENDED
         cands.append(max(0.0, min(1.0, (sa[0] - cut) / (1.0 - cut))))
-    if en:  # Enformer/Borzoi: calibrated band (percentile vs benign null, or raw fallback)
+    if en and (config.INTERPRET_MODEL != "alphagenome2" or enformer.percentile(en[0], ref, alt) is not None):  # Enformer/Borzoi: calibrated band (percentile vs benign null, or raw fallback)
         cands.append({"high": 1.0, "moderate": 0.5, "low": 0.1}[enformer.band(en[0], ref, alt)])
     return max(cands) if cands else 0.0
 

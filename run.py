@@ -656,7 +656,7 @@ def build_parser() -> argparse.ArgumentParser:
                              "category (S1); omit category/decision to list current grants")
     sp.add_argument("sample", nargs="?")
     sp.add_argument("category", nargs="?",
-                    choices=[consent_mod.CATEGORY_ADULT_ONSET_UNTREATABLE])
+                    choices=[consent_mod.CATEGORY_ADULT_ONSET_UNTREATABLE, consent_mod.CATEGORY_EXTERNAL_SCORING])
     sp.add_argument("decision", nargs="?", choices=["yes", "no"])
 
     sp = sub.add_parser("family-migrate",
@@ -693,11 +693,20 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--force", action="store_true")
 
     sp = sub.add_parser("interpret",
-                        help="non-coding/regulatory effect (Enformer on the GPU box) for a snapshot")
+                        help="non-coding effect (local GPU or opt-in AlphaGenome API) for a snapshot")
     sp.add_argument("snapshot")
     sp.add_argument("--force", action="store_true")
+    sp.add_argument("--dry-run", action="store_true", help="list requests without contacting a scoring service")
     sp.add_argument("--calibrate", action="store_true",
                     help="build the benign-null calibration (percentile bands) instead of a report")
+
+    sp = sub.add_parser("second-hit",
+                        help="recessive second-variant research candidates (AlphaGenome 2, opt-in)")
+    sp.add_argument("snapshot")
+    sp.add_argument("--dry-run", action="store_true",
+                    help="list requests without contacting the scoring service")
+    sp.add_argument("--phase", action="store_true",
+                    help="resolve each candidate pair's phase from reads (WhatsHap)")
 
     sp = sub.add_parser("provenance",
                         help="record provenance/confidence + variant history for a snapshot")
@@ -842,9 +851,13 @@ def main(argv: list[str]) -> int:
             forcecall_mod.force_call(args.sample, args.force); return 0
         case "interpret":
             if args.calibrate:
-                interpret_mod.calibrate(args.snapshot, args.force)
+                interpret_mod.calibrate(args.snapshot, args.force, dry_run=args.dry_run)
             else:
-                interpret_mod.interpret_report(args.snapshot, args.force)
+                interpret_mod.interpret_report(args.snapshot, args.force, dry_run=args.dry_run)
+            return 0
+        case "second-hit":
+            from pipeline.secondhit import second_hit
+            second_hit(args.snapshot, dry_run=args.dry_run, phase=args.phase)
             return 0
         case "provenance":
             if args.backfill:

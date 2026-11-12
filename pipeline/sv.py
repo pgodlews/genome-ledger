@@ -168,6 +168,32 @@ def sv_report(sample: str, force: bool = False) -> Path:
         by_type[sv["svtype"]] = by_type.get(sv["svtype"], 0) + 1
     type_summary = ", ".join(f"{k}: {v}" for k, v in sorted(by_type.items())) or "none"
 
+    # Phase 6 (opt-in): AlphaGenome 2 expression prediction for DEL/DUP events overlapping
+    # or within 100 kb of a panel gene. Only with INTERPRET_MODEL=alphagenome2; egress is
+    # gated on the key and family consent inside alphagenome_client.sv_predictions.
+    ag_on = config.INTERPRET_MODEL == "alphagenome2"
+    ag_pred, ag_note, near = {}, "", []
+    if ag_on:
+        from . import alphagenome_client as ag
+        pairs = []
+        for sv in svs:
+            if sv["svlen"] > _FOCAL_MAX_BP:
+                continue
+            for g in panel:
+                if g["chrom"] != sv["chrom"]:
+                    continue
+                gap = max(int(g["start"]) - sv["end"], sv["start"] - int(g["end"]), 0)
+                if gap <= ag.SV_NEAR_BP:
+                    pairs.append((sv, g["gene"]))
+                    if gap > 0:
+                        near.append((sv, g, gap))
+        ag_pred, ag_note = ag.sv_predictions(sample, pairs)
+
+    def _ag_cell(sv: dict, genes: list[dict]) -> str:
+        cells = [f"{g['gene']}: {ag_pred[k]}" for g in genes
+                 if (k := (str(sv["chrom"]), sv["start"], sv["end"], sv["svtype"], g["gene"])) in ag_pred]
+        return "; ".join(cells) or "—"
+
     def _kb(n: int) -> str:
         return f"{n/1000:.1f} kb" if n >= 1000 else f"{n} bp"
 
@@ -175,8 +201,9 @@ def sv_report(sample: str, force: bool = False) -> Path:
         sv, genes = fg
         gene_s = ", ".join(g["gene"] for g in genes)
         disease = "; ".join(sorted({g["disease"] for g in genes}))
-        return (f"| {gene_s} | {disease} | {sv['svtype']} | "
-                f"{sv['chrom']}:{sv['start']}-{sv['end']} | {_kb(sv['svlen'])} | {sv['gt']} |")
+        row = (f"| {gene_s} | {disease} | {sv['svtype']} | "
+               f"{sv['chrom']}:{sv['start']}-{sv['end']} | {_kb(sv['svlen'])} | {sv['gt']} |")
+        return row + (f" {_ag_cell(sv, genes)} |" if ag_on else "")
 
     lines = [
         f"# Structural variants — {sample}",
@@ -191,13 +218,31 @@ def sv_report(sample: str, force: bool = False) -> Path:
         "",
     ]
     if flagged:
+        ag_h = (" AlphaGenome 2 expression prediction |", "---|") if ag_on else ("", "")
         lines += [
-            "| Gene | Disease | Type | Locus (GRCh38) | Size | GT |",
-            "|------|---------|------|----------------|------|----|",
+            "| Gene | Disease | Type | Locus (GRCh38) | Size | GT |" + ag_h[0],
+            "|------|---------|------|----------------|------|----|" + ag_h[1],
             *[_flag_row(fg) for fg in flagged],
         ]
     else:
         lines.append("_No PASS structural variant overlaps a curated SV-panel gene._")
+    if ag_on:
+        near_rows = [f"| {g['gene']} | {sv['svtype']} | {sv['chrom']}:{sv['start']}-{sv['end']} | "
+                     f"{_kb(sv['svlen'])} | {_kb(gap)} | {_ag_cell(sv, [g])} |"
+                     for sv, g, gap in near]
+        lines += ["", "## AlphaGenome 2 predictions for nearby events (research only)", "",
+                  "Model-predicted change in the gene's expression in its panel tissue, for "
+                  f"deletions/duplications up to {ag.SV_MAX_BP // 1000} kb overlapping or within "
+                  f"{ag.SV_NEAR_BP // 1000} kb of a panel gene. A candidate, never a finding; "
+                  "not used for triage or ACMG. Scoring sends reference sequence for the event "
+                  "to the AlphaGenome API (recorded in the egress log).",
+                  *([f"_{ag_note}._"] if ag_note else []), ""]
+        if near_rows:
+            lines += ["| Gene | Type | Locus (GRCh38) | Size | Distance to gene | Prediction |",
+                      "|---|---|---|---|---|---|", *near_rows]
+        else:
+            lines.append("_No non-overlapping event lies within range of a panel gene._")
+        lines += ["", ag.TERMS]
     lines += [
         "",
         "## Caveats",

@@ -26,7 +26,12 @@ reclassified from "uncertain" to "pathogenic" next year doesn't go unnoticed.
 - **More than ClinVar:** ACMG-style reasoning, polygenic scores calibrated against 1000 Genomes,
   pharmacogenomics, HLA, repeat expansions, structural variants and mtDNA.
 - **Private by design:** runs on your own Mac or Linux machine; incidental findings are opt-in
-  per person; `share` writes clean copies of a VCF or CRAM for handing to a doctor.
+  per person; `share` writes clean copies of a VCF or CRAM for handing to a doctor. The one
+  exception is the optional `alphagenome2` backend for `interpret`: it is off by default, and
+  when turned on it sends variant coordinates (and, for structural variants, reference
+  sequence) with a tissue ID to Google DeepMind's AlphaGenome API. It never sends sample IDs
+  or names, and only sends variants whose carriers have all granted `external_scoring`
+  consent. Every request is logged.
 - **Who it's for:** people with their own sequencing data who are comfortable on the command
   line. It is not a clinical tool and does not replace a geneticist.
 
@@ -294,7 +299,8 @@ Available: `de_novo`, `recessive`, `compound_het`, `x_linked`, `segregation`.
 | `phase` | read-backed phasing cis/trans (WhatsHap) for a sample |
 | `denovo` | trio de-novo variants for a child, confirmed off **both parents' CRAMs** (force-call + raw pileup) |
 | `segregation` | trio segregation: resolve compound hets by which parent transmitted each variant (any distance, no child reads needed) |
-| `interpret` | regulatory-effect scores for non-coding variants (Enformer / Borzoi on a GPU box) for a snapshot |
+| `interpret` | regulatory-effect scores for non-coding variants for a snapshot: Enformer / Borzoi on a GPU box, or opt-in AlphaGenome 2 via its API (`INTERPRET_MODEL=alphagenome2`, `--dry-run` to preview) |
+| `second-hit` | recessive second-variant research candidates scored by AlphaGenome 2 (opt-in; `--phase` for read-backed phase) |
 | `consent` | record or withdraw a person's opt-in to incidental findings; with no arguments, list them |
 | `diff` | write DELTA report between two snapshots (multi-factor triage into 4 tiers) |
 | `provenance` | record provenance/confidence + variant history for a snapshot (`--backfill` for history over all snapshots) |

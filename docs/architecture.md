@@ -99,7 +99,7 @@ flowchart LR
     subgraph INTERP["Interpretation"]
         AM["AlphaMissense / SpliceAI<br/>table lookups folded<br/>into the FULL report"]
         ACMG["acmg<br/>ACMG-style classification<br/>+ ClinVar divergence"]
-        REG["interpret<br/>Enformer / Borzoi on a GPU box<br/>non-coding regulatory effect"]
+        REG["interpret<br/>Enformer / Borzoi on a GPU box,<br/>or AlphaGenome 2 API (opt-in)<br/>non-coding regulatory effect"]
     end
 
     REPORT["report<br/>FULL annotated report<br/>per snapshot"]
@@ -156,7 +156,7 @@ flowchart LR
 | **phase** | DuckDB + own CRAM | Are two hits on the same copy? | WhatsHap — resolves pairs transmission cannot, and needs no parents |
 | **segregation** | DuckDB + parents' CRAMs | Which parent transmitted each variant? | in-cis (one copy intact) vs in-trans (both hit) — the difference between benign and disease |
 | **hla-type** | CRAM | Full classical HLA alleles | arcasHLA — cross-checks the tag-SNP calls and gives 4-digit types |
-| **interpret** | DuckDB + GPU box | Does a non-coding variant disturb regulation? | Enformer / Borzoi scores for carried regulatory variants; optional, needs a GPU |
+| **interpret** | DuckDB + GPU box, or the AlphaGenome API | Does a non-coding variant disturb regulation, and in which tissue? | Enformer / Borzoi scores (GPU), or AlphaGenome 2 scores in each gene's disease tissue (opt-in API: needs a key and per-carrier consent; every request logged) |
 | **denovo** | DuckDB + parents' CRAMs | Which variants are new in this child? | Expected 40–150 SNVs/generation — one of the few stages with a hard published prior |
 
 > **Why `force-call` exists** — `call` emits only *differences*, so a
@@ -370,6 +370,7 @@ flowchart TD
     TRIO --> DN
     TWO["Two snapshots"] --> DELTA["diff: the DELTA report"]
     GPU["A GPU box over SSH"] --> REG["interpret"]
+    AGAPI["AlphaGenome API key + consent"] --> REG
     DOCKER["Docker"] --> DSV["sv, hla-type"]
 ```
 

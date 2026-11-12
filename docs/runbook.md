@@ -227,6 +227,36 @@ The copy's header is rebuilt from an allowlist and the sample is named after the
 the reads in a CRAM still carry the sequencer's run and flowcell ids in their names. A CRAM
 also needs the same GRCh38 reference to be read — say which one when you send it.
 
+## Recipe: AlphaGenome 2 regulatory scores (opt-in, sends data out)
+
+This is the one stage that sends anything off the machine. It is off unless you do all of
+the following.
+
+1. Get a free non-commercial key from the AlphaGenome site. Keep it in your keychain or a
+   git-ignored `.env`, and export it only for the run: `export ALPHAGENOME_API_KEY=…`.
+   The pipeline never writes it to disk, logs or reports.
+2. Install the client: `uv sync --extra alphagenome`.
+3. Grant consent for each person whose variants may be sent:
+   `uv run python run.py consent <sample> external_scoring yes`. A variant is sent only if
+   **every** carrier in the snapshot has consented. Structural variants need every
+   sequenced person.
+4. Preview with no network: `INTERPRET_MODEL=alphagenome2 uv run python run.py interpret <snapshot> --dry-run`.
+   This lists the variants, tissues and call count, and how many were withheld for consent.
+5. Run without `--dry-run`. `ALPHAGENOME_MAX_CALLS` (default 500) caps calls per run;
+   rerunning resumes where it stopped. `ALPHAGENOME_PANEL_ONLY=0` widens beyond panel genes.
+6. Calibrate once per epoch: `… interpret <snapshot> --calibrate`. Until then scores display
+   but carry no triage weight.
+7. Recessive second-hit candidates: `INTERPRET_MODEL=alphagenome2 uv run python run.py second-hit <snapshot> [--dry-run] [--phase]`.
+
+**What left the machine:** `GENOMES_ROOT/interpret/alphagenome2_egress.tsv` has one row per
+request: time, variant, tissue, scorers, and whether coordinates or reference sequence was sent.
+
+**New epoch warning:** the service has no model version, so every run first scores five
+public sentinel variants (`panels/alphagenome_sentinels.tsv`). If their scores change, the
+log warns about a new epoch and old scores are kept but rescored over the next runs.
+Recalibrate afterwards. DELTA lists bands that changed because of the model separately,
+as log-only.
+
 ## Running unattended (long jobs)
 
 Calling a whole genome takes hours. Run it **detached** so it survives the terminal

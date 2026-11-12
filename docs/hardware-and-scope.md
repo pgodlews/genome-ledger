@@ -68,6 +68,12 @@ The framework separates its workloads into **clear compute profiles**; pick the 
 A GPU box is used purely as a stateless compute node: point `INTERPRET_SSH_HOST` (and the
 related settings in `pipeline/config.py`) at it, or leave them unset and stay on Profile A/B.
 
+`interpret` no longer strictly needs a GPU. With `INTERPRET_MODEL=alphagenome2` it calls
+Google DeepMind's hosted AlphaGenome 2 API from Profile A hardware. Each operator needs
+their own free API key. The terms limit outputs to non-commercial research: no clinical
+use, and no training of variant-effect models. Shared outputs must carry the AlphaGenome
+Output Terms notice. Commercial access goes through Google Cloud.
+
 ---
 
 ## 4. Legal, Licensing & Framing

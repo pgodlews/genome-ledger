@@ -134,6 +134,23 @@ def _full_report(con, snapshot_id: str) -> list[Path]:
                     "|------|---------|----------|",
                     *sa_rows,
                 ]
+        if config.INTERPRET_MODEL == "alphagenome2":
+            from . import enformer
+            from .alphagenome_client import splice_label
+            predictions = []
+            for gene, chrom, pos, ref, alt, csq in con.execute(
+                    "SELECT DISTINCT gene,chrom,pos,ref,alt,consequence FROM variants "
+                    "WHERE snapshot_id=? AND sample_id=? AND zygosity IN ('HET','HOM')",
+                    [snapshot_id, sample]).fetchall():
+                en = enformer.lookup(chrom,pos,ref,alt)
+                sp = splice_label(chrom,pos,ref,alt,gene,csq)
+                if en or sp != '—':
+                    predictions.append(f"| {gene} | {chrom}:{pos} {ref}>{alt} | "
+                        f"{enformer.label(en,ref,alt)} | {sp} |")
+            if predictions:
+                lines += ["", "## AlphaGenome model-predicted candidates", "",
+                          "| Gene | Variant | Regulatory prediction / tissue | Splice (unvalidated) |",
+                          "|---|---|---|---|", *predictions]
         lines += ["", _CAVEAT, ""]
         lines += limitations.render(snapshot_id, report_kind="full", sample=sample)
 

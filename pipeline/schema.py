@@ -42,7 +42,7 @@ CREATE TABLE IF NOT EXISTS annotation_provenance (
     pos             BIGINT,
     ref             VARCHAR,
     alt             VARCHAR,
-    source          VARCHAR,    -- clinvar | gnomad_af | alphamissense | spliceai | enformer | vep_csq | gnomad_constraint
+    source          VARCHAR,    -- clinvar | gnomad_af | alphamissense | spliceai | enformer (including borzoi/alphagenome2) | vep_csq | gnomad_constraint
     version         VARCHAR,    -- e.g. 'ClinVar 2026-06-28', 'VEP r112'
     value_summary   VARCHAR,    -- compact rendering of the value used
     confidence      VARCHAR,    -- High | Medium | Low | Very Low
@@ -65,7 +65,7 @@ CREATE TABLE IF NOT EXISTS variant_history (
     clinvar_revstat VARCHAR,
     gnomad_af       DOUBLE,
     acmg_tier       VARCHAR,    -- from the acmg stage when the gene is on-panel
-    model_band      VARCHAR,    -- enformer/borzoi band when scored
+    model_band      VARCHAR,    -- enformer/borzoi/alphagenome2 band when scored
     PRIMARY KEY (chrom, pos, ref, alt, snapshot_id)
 );
 """

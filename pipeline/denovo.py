@@ -560,9 +560,14 @@ def _row(c: str, parents: list[str], cand: dict) -> str:
     detail = " · ".join(f"{p}: {pv[p][1]}" for p in parents if p in pv)
     gene = cand.get("gene") or "—"
     csq = (cand.get("csq") or "—").split(",")[0]
+    from . import enformer
+    from .alphagenome_client import splice_label
+    k = (cand["chrom"], cand["pos"], cand["ref"], cand["alt"])
+    regulatory = enformer.label(enformer.lookup(*k), k[2], k[3])
+    splice = splice_label(*k, cand.get("gene"), cand.get("csq")) if config.INTERPRET_MODEL == "alphagenome2" else "—"
     return (f"| {cand['chrom']}:{cand['pos']} | {cand['ref']}>{cand['alt']} | {cand['kind']} | "
             f"{cand['dp']}× | {cand['vaf']:.2f} | {gene} | {csq} | "
-            f"{cand.get('clinvar') or '—'} | {detail} |")
+            f"{cand.get('clinvar') or '—'} | {detail} | {regulatory} | {splice} |")
 
 
 def _filter_lines(stats: dict) -> list[str]:
@@ -644,9 +649,9 @@ def _report(child: str, parents: list[str], cands: list[dict], stats: dict,
     snv = sum(1 for c in conf if c["kind"] == "SNV")
 
     hdr = ["| Position | Change | Type | Child DP | Child VAF | Gene | Consequence | "
-           "ClinVar | Parental evidence |",
+           "ClinVar | Parental evidence | Regulatory prediction / tissue | AlphaGenome splice (unvalidated) |",
            "|----------|--------|------|---------:|----------:|------|-------------|"
-           "---------|-------------------|"]
+           "---------|-------------------|---|---|"]
     head = [
         f"# Trio de-novo variants — {child}",
         "",
@@ -791,6 +796,11 @@ def denovo(child: str, force: bool = False, confirm_parents: bool = True) -> Pat
     if confirm_parents and cands:
         cands = confirm(child, cands, parents, force=force)
     _annotate(child, cands)
+    # Persist confirmed coordinates for non-coding interpret priority; never call the API here.
+    from .alphagenome_client import _write_tsv
+    _write_tsv(_work_dir(child) / "confirmed.tsv",
+               [c for c in cands if confirm_parents and c.get("status") == CONFIRMED],
+               ["chrom", "pos", "ref", "alt"])
     # Whether the parental pass RAN — not whether it found anything. Gating on `cands` made
     # a zero-candidate run print "the parental force-call pass did not run", which is false
     # and reads like a failure.

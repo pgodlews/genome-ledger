@@ -62,6 +62,11 @@ def _select_variants(snapshot: str, already: set) -> list[dict]:
     """, params).fetchall()
     cols = [d[0] for d in con.description]
     con.close()
+    if config.INTERPRET_MODEL == "alphagenome2":
+        from .util import read_tsv
+        priority = {(r["chrom"], int(r["pos"]), r["ref"], r["alt"])
+                    for p in config.DENOVO_DIR.glob("*/confirmed.tsv") for r in read_tsv(p)}
+        rows.sort(key=lambda r: (str(r[0]), int(r[1]), r[2], r[3]) not in priority)
     out = []
     for r in rows:
         d = dict(zip(cols, r))
@@ -320,10 +325,16 @@ def _select_common(snapshot: str) -> list[dict]:
     return out
 
 
-def calibrate(snapshot: str, force: bool = False) -> Path:
+def calibrate(snapshot: str, force: bool = False, *, dry_run: bool = False) -> Path:
     """Build the benign null: score a sample of common non-coding variants and save the sorted
     Δmax distribution per stratum (SNV / indel). Subsequent reports express each variant's Δ as
     a percentile against this null. Genome/model-level — run once, reused for the whole family."""
+    if config.INTERPRET_MODELS[config.INTERPRET_MODEL]["transport"] == "api":
+        from . import alphagenome_client
+        return alphagenome_client.run_snapshot(snapshot, calibrate=True, dry_run=dry_run, force=force)
+    if dry_run:
+        print("Local GPU backend: no scoring performed (--dry-run).")
+        return config.INTERPRET_DIR
     require_tools("samtools")
     if not config.REF_FASTA.exists():
         raise SystemExit(f"{config.REF_FASTA} missing. Run `setup` first.")
@@ -360,7 +371,13 @@ def calibrate(snapshot: str, force: bool = False) -> Path:
     return config.ENFORMER_CALIBRATION_FILE
 
 
-def interpret_report(snapshot: str, force: bool = False) -> Path:
+def interpret_report(snapshot: str, force: bool = False, *, dry_run: bool = False) -> Path:
+    if config.INTERPRET_MODELS[config.INTERPRET_MODEL]["transport"] == "api":
+        from . import alphagenome_client
+        return alphagenome_client.run_snapshot(snapshot, calibrate=False, dry_run=dry_run, force=force)
+    if dry_run:
+        print("Local GPU backend: no scoring performed (--dry-run).")
+        return config.INTERPRET_DIR
     require_tools("samtools")
     if not config.REF_FASTA.exists():
         raise SystemExit(f"{config.REF_FASTA} missing. Run `setup` first.")

@@ -1,0 +1,81 @@
+gene	condition	label	rationale
+BRCA1	UBERON:0001911_CL:0002327	mammary epithelium	Breast cancer relevance; multisystem syndromes are not exhausted by this tissue. RNA: observed.
+BRCA2	UBERON:0001911_CL:0002327	mammary epithelium	Breast cancer relevance; multisystem syndromes are not exhausted by this tissue. RNA: observed.
+TP53	UBERON:0001911_CL:0002327	mammary epithelium	Breast cancer relevance; multisystem syndromes are not exhausted by this tissue. RNA: observed.
+PTEN	UBERON:0001911_CL:0002327	mammary epithelium	Breast cancer relevance; multisystem syndromes are not exhausted by this tissue. RNA: observed.
+MLH1	UBERON:0001155_CL:0011108	colon epithelium	Colorectal disease tissue. RNA: imputed_supported.
+MSH2	UBERON:0001155_CL:0011108	colon epithelium	Colorectal disease tissue. RNA: imputed_supported.
+MSH6	UBERON:0001155_CL:0011108	colon epithelium	Colorectal disease tissue. RNA: imputed_supported.
+PMS2	UBERON:0001155_CL:0011108	colon epithelium	Colorectal disease tissue. RNA: imputed_supported.
+APC	UBERON:0001155_CL:0011108	colon epithelium	Colorectal disease tissue. RNA: imputed_supported.
+MUTYH	UBERON:0001155_CL:0011108	colon epithelium	Colorectal disease tissue. RNA: imputed_supported.
+CDH1	UBERON:0000945_CL:0002178	stomach epithelium	Diffuse gastric cancer; exploratory imputation, interpret cautiously. RNA: imputed_exploratory.
+VHL	CL:0002518	kidney epithelium	Renal manifestation proxy; systemic disease also affects other tissues. RNA: observed.
+GLA	CL:0002518	kidney epithelium	Renal manifestation proxy; systemic disease also affects other tissues. RNA: observed.
+MEN1	UBERON:0000016	endocrine pancreas	Pancreatic endocrine manifestation; parathyroid and pituitary effects are not covered. RNA: observed.
+RET	UBERON:0002046	thyroid	Thyroid tissue proxy; not specific to medullary C cells. RNA: observed.
+SDHB	UBERON:0002369_CL:0000336	adrenal chromaffin cell	Pheochromocytoma tissue; proxy for extra-adrenal paraganglia. RNA: imputed_supported.
+SDHC	UBERON:0002369_CL:0000336	adrenal chromaffin cell	Pheochromocytoma tissue; proxy for extra-adrenal paraganglia. RNA: imputed_supported.
+SDHD	UBERON:0002369_CL:0000336	adrenal chromaffin cell	Pheochromocytoma tissue; proxy for extra-adrenal paraganglia. RNA: imputed_supported.
+SDHAF2	UBERON:0002369_CL:0000336	adrenal chromaffin cell	Pheochromocytoma tissue; proxy for extra-adrenal paraganglia. RNA: imputed_supported.
+RB1	UBERON:0000966	retina	Retinal manifestation; Usher hearing effects are not covered. RNA: imputed_supported.
+MYO7A	UBERON:0000966	retina	Retinal manifestation; Usher hearing effects are not covered. RNA: imputed_supported.
+USH2A	UBERON:0000966	retina	Retinal manifestation; Usher hearing effects are not covered. RNA: imputed_supported.
+CDH23	UBERON:0000966	retina	Retinal manifestation; Usher hearing effects are not covered. RNA: imputed_supported.
+TSC1	UBERON:0000955_CL:0000540	brain neuron	Neurologic manifestation proxy; not tumor-cell or glial specific. RNA: imputed_supported.
+TSC2	UBERON:0000955_CL:0000540	brain neuron	Neurologic manifestation proxy; not tumor-cell or glial specific. RNA: imputed_supported.
+NF1	UBERON:0000955_CL:0000540	brain neuron	Neurologic manifestation proxy; not tumor-cell or glial specific. RNA: imputed_supported.
+NF2	UBERON:0000955_CL:0000540	brain neuron	Neurologic manifestation proxy; not tumor-cell or glial specific. RNA: imputed_supported.
+HEXA	UBERON:0000955_CL:0000540	brain neuron	Neurologic manifestation proxy; not tumor-cell or glial specific. RNA: imputed_supported.
+FMR1	UBERON:0000955_CL:0000540	brain neuron	Neurologic manifestation proxy; not tumor-cell or glial specific. RNA: imputed_supported.
+LDLR	CL:0000182	hepatocyte	Hepatic synthesis or metabolic manifestation; multisystem effects not exhausted. RNA: observed.
+APOB	CL:0000182	hepatocyte	Hepatic synthesis or metabolic manifestation; multisystem effects not exhausted. RNA: observed.
+PCSK9	CL:0000182	hepatocyte	Hepatic synthesis or metabolic manifestation; multisystem effects not exhausted. RNA: observed.
+TTR	CL:0000182	hepatocyte	Hepatic synthesis or metabolic manifestation; multisystem effects not exhausted. RNA: observed.
+ATP7B	CL:0000182	hepatocyte	Hepatic synthesis or metabolic manifestation; multisystem effects not exhausted. RNA: observed.
+HFE	CL:0000182	hepatocyte	Hepatic synthesis or metabolic manifestation; multisystem effects not exhausted. RNA: observed.
+PAH	CL:0000182	hepatocyte	Hepatic synthesis or metabolic manifestation; multisystem effects not exhausted. RNA: observed.
+SERPINA1	CL:0000182	hepatocyte	Hepatic synthesis or metabolic manifestation; multisystem effects not exhausted. RNA: observed.
+GALT	CL:0000182	hepatocyte	Hepatic synthesis or metabolic manifestation; multisystem effects not exhausted. RNA: observed.
+BCKDHA	CL:0000182	hepatocyte	Hepatic synthesis or metabolic manifestation; multisystem effects not exhausted. RNA: observed.
+BCKDHB	CL:0000182	hepatocyte	Hepatic synthesis or metabolic manifestation; multisystem effects not exhausted. RNA: observed.
+DBT	CL:0000182	hepatocyte	Hepatic synthesis or metabolic manifestation; multisystem effects not exhausted. RNA: observed.
+BTD	CL:0000182	hepatocyte	Hepatic synthesis or metabolic manifestation; multisystem effects not exhausted. RNA: observed.
+OTC	CL:0000182	hepatocyte	Hepatic synthesis or metabolic manifestation; multisystem effects not exhausted. RNA: observed.
+F9	CL:0000182	hepatocyte	Hepatic synthesis or metabolic manifestation; multisystem effects not exhausted. RNA: observed.
+MYBPC3	CL:0000746	cardiomyocyte	Cardiac disease manifestation. RNA: observed.
+MYH7	CL:0000746	cardiomyocyte	Cardiac disease manifestation. RNA: observed.
+TNNT2	CL:0000746	cardiomyocyte	Cardiac disease manifestation. RNA: observed.
+TNNI3	CL:0000746	cardiomyocyte	Cardiac disease manifestation. RNA: observed.
+TPM1	CL:0000746	cardiomyocyte	Cardiac disease manifestation. RNA: observed.
+LMNA	CL:0000746	cardiomyocyte	Cardiac disease manifestation. RNA: observed.
+TTN	CL:0000746	cardiomyocyte	Cardiac disease manifestation. RNA: observed.
+PKP2	CL:0000746	cardiomyocyte	Cardiac disease manifestation. RNA: observed.
+DSP	CL:0000746	cardiomyocyte	Cardiac disease manifestation. RNA: observed.
+DSG2	CL:0000746	cardiomyocyte	Cardiac disease manifestation. RNA: observed.
+KCNQ1	CL:0000746	cardiomyocyte	Cardiac disease manifestation. RNA: observed.
+KCNH2	CL:0000746	cardiomyocyte	Cardiac disease manifestation. RNA: observed.
+SCN5A	CL:0000746	cardiomyocyte	Cardiac disease manifestation. RNA: observed.
+RYR2	CL:0000746	cardiomyocyte	Cardiac disease manifestation. RNA: observed.
+FBN1	UBERON:0000947_CL:0002539	aortic smooth muscle	Aortic/vascular manifestation proxy; connective tissue disease is multisystem. RNA: observed.
+TGFBR1	UBERON:0000947_CL:0002539	aortic smooth muscle	Aortic/vascular manifestation proxy; connective tissue disease is multisystem. RNA: observed.
+TGFBR2	UBERON:0000947_CL:0002539	aortic smooth muscle	Aortic/vascular manifestation proxy; connective tissue disease is multisystem. RNA: observed.
+SMAD3	UBERON:0000947_CL:0002539	aortic smooth muscle	Aortic/vascular manifestation proxy; connective tissue disease is multisystem. RNA: observed.
+ACTA2	UBERON:0000947_CL:0002539	aortic smooth muscle	Aortic/vascular manifestation proxy; connective tissue disease is multisystem. RNA: observed.
+COL3A1	UBERON:0000947_CL:0002539	aortic smooth muscle	Aortic/vascular manifestation proxy; connective tissue disease is multisystem. RNA: observed.
+RYR1	UBERON:0001134	skeletal muscle	Skeletal muscle manifestation. RNA: observed.
+CACNA1S	UBERON:0001134	skeletal muscle	Skeletal muscle manifestation. RNA: observed.
+GAA	UBERON:0001134	skeletal muscle	Skeletal muscle manifestation. RNA: observed.
+DMD	UBERON:0001134	skeletal muscle	Skeletal muscle manifestation. RNA: observed.
+CFTR	UBERON:0002185_CL:0002328	bronchial epithelium	Airway manifestation; pancreatic and other epithelial effects not covered. RNA: observed.
+HBB	UBERON:0002371_CL:0000765	bone marrow erythroblast	Erythroid precursor proxy for red-cell expression. RNA: imputed_supported.
+G6PD	UBERON:0002371_CL:0000765	bone marrow erythroblast	Erythroid precursor proxy for red-cell expression. RNA: imputed_supported.
+SMN1	CL:0000100	motor neuron	Motor neuron manifestation; deletion dosage is a separate question. RNA: observed.
+GBA	UBERON:0000955_CL:0000235	brain macrophage	Macrophage proxy for lysosomal storage; brain condition does not cover all organs. RNA: imputed_supported.
+CYP21A2	UBERON:0002369_CL:0002097	adrenal cortical cell	Steroid-producing adrenal cortex. RNA: imputed_supported.
+F8	CL:0000115	endothelial cell	Endothelial proxy; not specifically liver sinusoidal endothelial cells. RNA: observed.
+MYH7	UBERON:0001134	skeletal muscle	Secondary muscle manifestation; primary summary remains cardiac.
+LMNA	UBERON:0001134	skeletal muscle	Secondary muscle manifestation; primary summary remains cardiac.
+TTN	UBERON:0001134	skeletal muscle	Secondary muscle manifestation; primary summary remains cardiac.
+PMP22	UBERON:0000010_CL:0002573	peripheral nerve Schwann cell	CMT1A/HNPP dosage gene expressed in myelinating Schwann cells (SV panel). RNA: imputed_exploratory, treat as a hypothesis.
+PKD1	CL:0002518	kidney epithelium	ADPKD renal tubular epithelium (SV panel). RNA: observed.

@@ -45,6 +45,7 @@ def connect() -> duckdb.DuckDBPyConnection:
     con.execute(SCHEMA)
     for ddl in schema.COMPANION_TABLES:  # derived, canonical-key companion tables
         con.execute(ddl)
+    con.execute("ALTER TABLE variant_history ADD COLUMN IF NOT EXISTS model_epoch VARCHAR")
     return con
 
 

@@ -30,6 +30,8 @@ from .util import log, read_tsv
 
 # The one incidental category wired up so far — repeat-expansion neurodegenerative
 # disorders (pipeline/repeats.py) with no disease-modifying treatment.
+CATEGORY_EXTERNAL_SCORING = "external_scoring"
+
 CATEGORY_ADULT_ONSET_UNTREATABLE = "adult_onset_untreatable"
 
 _TRUE = {"yes", "true", "1"}

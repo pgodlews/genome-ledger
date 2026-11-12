@@ -47,6 +47,24 @@ Per-genome reports are not dated: they change when the genome or the tool change
 ClinVar does. On an older snapshot's dashboard they are grouped under *Current (not from
 this snapshot)* for that reason.
 
+### AlphaGenome 2 additions (only with `INTERPRET_MODEL=alphagenome2`)
+
+- `interpret_alphagenome2.md` (family): per-variant model prediction with the tissue, the
+  epoch, the report date and the number of variants withheld for consent.
+- `second_hit.md` (family): for each sample and AR panel gene with exactly one actionable
+  het variant, rare candidate second variants. Columns: tissue, known variant, candidate,
+  phase (parental-origin candidate, read-backed with `--phase`, or unknown), absolute
+  expression prediction, splice prediction. Cis candidates rank last.
+- De novo report: two extra columns, the regulatory prediction with tissue, and the
+  AlphaGenome splice value (unvalidated) where SpliceAI has no score.
+- Per-person full report: an "AlphaGenome model-predicted candidates" table.
+- SV report: an expression-prediction column for panel-gene hits, plus a section for
+  DEL/DUP events up to 50 kb within 100 kb of a panel gene.
+- DELTA: a "Model-driven changes (log only)" section when an epoch change moved a band.
+
+Every one of these is labelled a model prediction and carries the AlphaGenome Output
+Terms notice.
+
 ## The file contract
 
 Every report in the tree has the same shape, enforced in one place (`util.write_report`):

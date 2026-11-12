@@ -8,3 +8,6 @@ dependencies = [
     "duckdb>=1.5.4",
     "requests>=2.34.2",
 ]
+
+[project.optional-dependencies]
+alphagenome = ["alphagenome>=2.0,<3"]

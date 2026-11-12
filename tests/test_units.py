@@ -2075,6 +2075,224 @@ def test_validate_empty_run() -> None:
                 setattr(config, k, v)
 
 
+def test_alphagenome2() -> None:
+    """AlphaGenome 2 backend, fully offline: a fake client stands in for the SDK. Covers the
+    summary metric, consent gate, dry-run/no-key (no client built), egress log, epoch canary,
+    resume after a quota error, tissue mapping and Phase 6 SV consent/sequence egress."""
+    print("alphagenome2 backend (fake client, no network):")
+    import os
+    import tempfile
+    import types
+    import duckdb
+    from pipeline import config, consent, enformer as em, alphagenome_client as ag
+    from pipeline.panel import load_panel
+    from pipeline.util import read_tsv
+
+    root = pathlib.Path(tempfile.mkdtemp())
+    names = ("INTERPRET_DIR", "ALPHAGENOME_LONG_FILE", "ALPHAGENOME_EGRESS_FILE",
+             "ALPHAGENOME_EPOCH_FILE", "ENFORMER_SCORES_FILE", "ENFORMER_CALIBRATION_FILE",
+             "CONSENT_FILE", "DUCKDB_FILE", "ALPHAGENOME_MAX_CALLS", "ALPHAGENOME_PANEL_ONLY",
+             "SAMPLES_TSV")
+    saved = {n: getattr(config, n) for n in names}
+    saved_factory, saved_time = ag._create_client, ag.time
+    saved_key = os.environ.pop("ALPHAGENOME_API_KEY", None)
+    saved_table, saved_cal = em._table, em._calibration
+    config.INTERPRET_DIR = root / "interpret"
+    config.ALPHAGENOME_LONG_FILE = root / "interpret" / "long.tsv"
+    config.ALPHAGENOME_EGRESS_FILE = root / "interpret" / "egress.tsv"
+    config.ALPHAGENOME_EPOCH_FILE = root / "interpret" / "epoch.json"
+    config.ENFORMER_SCORES_FILE = root / "interpret" / "alphagenome2_scores.tsv"
+    config.ENFORMER_CALIBRATION_FILE = root / "interpret" / "alphagenome2_calibration.json"
+    config.CONSENT_FILE = root / "consent.tsv"
+    config.DUCKDB_FILE = root / "g.duckdb"
+    config.SAMPLES_TSV = root / "samples.tsv"
+    config.ALPHAGENOME_MAX_CALLS, config.ALPHAGENOME_PANEL_ONLY = 500, True
+    ag.time = types.SimpleNamespace(sleep=lambda s: None)
+    em._table, em._calibration = None, {}
+
+    class Quota(Exception):
+        def code(self):
+            return "StatusCode.RESOURCE_EXHAUSTED"
+
+    class Fake:
+        built = 0
+
+        def __init__(self, shift=0.0, fail_from=None):
+            self.shift, self.fail_from, self.calls = shift, fail_from, []
+
+        def __call__(self, api_key):          # stands in for _create_client
+            Fake.built += 1
+            return self
+
+        def score(self, v, condition):
+            self.calls.append((dict(v), condition))
+            if self.fail_from is not None and len(self.calls) >= self.fail_from:
+                raise Quota()
+            return [  # invented numbers, shaped like tidy_scores records
+                {"output_type": "OutputType.RNA_SEQ", "gene_name": "BRCA1", "track_name": "t1",
+                 "raw_score": -0.8 + self.shift},
+                {"output_type": "OutputType.RNA_SEQ", "gene_name": "BRCA1", "track_name": "t2",
+                 "raw_score": 0.3},
+                {"output_type": "OutputType.RNA_SEQ", "gene_name": "OTHER", "track_name": "t1",
+                 "raw_score": 5.0},
+                {"output_type": "OutputType.DNASE", "gene_name": None, "track_name": "d1",
+                 "raw_score": 1.5},
+                {"output_type": "OutputType.POLYADENYLATION", "gene_name": "BRCA1",
+                 "track_name": "p", "raw_score": 9.0},
+            ]
+
+    def var(pos, ref="C", alt="T"):
+        return {"chrom": "17", "pos": pos, "ref": ref, "alt": alt, "gene": "BRCA1"}
+
+    A, B, C, D = var(43100000), var(43100100), var(43100200), var(43100300)
+    con = duckdb.connect(str(config.DUCKDB_FILE))
+    con.execute("CREATE TABLE variants (snapshot_id VARCHAR, sample_id VARCHAR, chrom VARCHAR, "
+                "pos BIGINT, ref VARCHAR, alt VARCHAR, zygosity VARCHAR, gene VARCHAR)")
+    for v, carriers in ((A, "S1 S2"), (B, "S1 S3"), (C, "S1"), (D, "S2")):
+        for s in carriers.split():
+            con.execute("INSERT INTO variants VALUES ('snap', ?, ?, ?, ?, ?, 'HET', 'BRCA1')",
+                        [s, v["chrom"], v["pos"], v["ref"], v["alt"]])
+    con.close()
+    cat = consent.CATEGORY_EXTERNAL_SCORING
+    consent.set_consent("S1", cat, True)
+    consent.set_consent("S2", cat, True)
+    try:
+        # --- summary metric ---------------------------------------------------------------
+        rows = ag._normalize(A, "X", Fake().score(A, "X"), "e")
+        check("unrequested scorer (POLYADENYLATION) is dropped",
+              all(r["scorer"] != "POLYADENYLATION" for r in rows))
+        check("summary = max |own-gene RNA_SEQ|, other genes ignored",
+              ag.summary(rows, "BRCA1") == (0.8, "RNA_SEQ"))
+        check("gene absent -> DNase fallback", ag.summary(rows, "NOTHERE") == (1.5, "DNASE"))
+        check("no rows -> None", ag.summary([], "BRCA1") is None)
+
+        # --- consent, dry run, no key: never build a client ---------------------------------
+        fake = Fake()
+        ag._create_client = fake
+        allowed, withheld = ag.score_selected("snap", [A, B], dry_run=True)
+        check("dry run: only the all-consenting variant is eligible", allowed == [A])
+        check("dry run: the variant with a non-consenting carrier is withheld", withheld == 1)
+        check("dry run builds no client and writes no egress",
+              Fake.built == 0 and not config.ALPHAGENOME_EGRESS_FILE.exists())
+        try:
+            ag.score_selected("snap", [A], dry_run=False)
+            check("no key -> exits", False)
+        except SystemExit as e:
+            check("no key -> exits naming the variable", "ALPHAGENOME_API_KEY" in str(e))
+        check("no key builds no client", Fake.built == 0)
+
+        # --- live run with the fake ---------------------------------------------------------
+        os.environ["ALPHAGENOME_API_KEY"] = "test-not-a-key"
+        n_sent = len(read_tsv(ag.ROOT / "panels/alphagenome_sentinels.tsv"))
+        ag.score_selected("snap", [A, B])
+        sent = [key for key in ((v["chrom"], v["pos"]) for v, _ in fake.calls)]
+        check("non-consented variant never reaches the client", ("17", B["pos"]) not in sent)
+        check("sentinels then the eligible variant", len(fake.calls) == n_sent + 1)
+        check("BRCA1 scored in its panel tissue",
+              fake.calls[-1][1] == ag.conditions_for("BRCA1")[0]["condition"])
+        egress = read_tsv(config.ALPHAGENOME_EGRESS_FILE)
+        check("every request is in the egress log", len(egress) == n_sent + 1)
+        check("egress log carries no sample id",
+              not any(s in config.ALPHAGENOME_EGRESS_FILE.read_text() for s in ("S1", "S2")))
+        check("SNV egress payload is coordinates", egress[-1]["payload"] == "coordinates")
+        em._table = None
+        hit = em.lookup("17", A["pos"], "C", "T")
+        check("summary row readable by enformer.lookup",
+              hit is not None and abs(hit[0] - 0.8) < 1e-9 and hit[3] == "RNA_SEQ:mammary epithelium")
+        eid1 = ag.epoch()["id"]
+
+        # --- epoch canary -------------------------------------------------------------------
+        fake.calls.clear()
+        ag.score_selected("snap", [A])
+        check("unchanged sentinels reuse the epoch", ag.epoch()["id"] == eid1)
+        check("cached current-epoch variant is not resent", len(fake.calls) == n_sent)
+        moved = Fake(shift=0.1)
+        ag._create_client = moved
+        ag.score_selected("snap", [A])
+        eid2 = ag.epoch()["id"]
+        check("changed sentinels start a new epoch", eid2 != eid1 and ag.epoch()["previous_epoch"] == eid1)
+        check("old-epoch rows are rescored", len(moved.calls) == n_sent + 1)
+        check("old rows retained in the long table",
+              {r["epoch"] for r in read_tsv(config.ALPHAGENOME_LONG_FILE)} == {eid1, eid2})
+        em._table = None
+        check("summary follows the new epoch", abs(em.lookup("17", A["pos"], "C", "T")[0] - 0.7) < 1e-9)
+
+        # --- resume after a quota error ------------------------------------------------------
+        consent.set_consent("S1", cat, True)
+        flaky = Fake(shift=0.1, fail_from=n_sent + 2)   # sentinels + C succeed, D hits quota
+        ag._create_client = flaky
+        ag.score_selected("snap", [C, D])
+        done = {int(r["pos"]) for r in ag.current_rows()}
+        check("quota stop keeps what was scored", C["pos"] in done and D["pos"] not in done)
+        healthy = Fake(shift=0.1)
+        ag._create_client = healthy
+        ag.score_selected("snap", [C, D])
+        check("rerun resumes with only the missing variant",
+              [v["pos"] for v, _ in healthy.calls[n_sent:]] == [D["pos"]])
+        config.ALPHAGENOME_MAX_CALLS = 3
+        try:
+            ag.score_selected("snap", [A])
+            check("cap below the sentinel count is refused", False)
+        except SystemExit:
+            check("cap below the sentinel count is refused", True)
+        config.ALPHAGENOME_MAX_CALLS = 500
+
+        # --- tissue mapping ------------------------------------------------------------------
+        mapped = {r["gene"] for r in read_tsv(ag.ROOT / "panels/gene_tissue.tsv")}
+        panel_genes = {g for d in load_panel() for g in d.genes}
+        sv_genes = {r["gene"] for r in read_tsv(config.SV_GENES_FILE)}
+        check("every monogenic panel gene has a tissue", panel_genes <= mapped)
+        check("every SV panel gene has a tissue", sv_genes <= mapped)
+        check("unmapped gene resolves to the configured fallback",
+              ag.conditions_for("NOT_A_GENE")[0]["condition"] == config.ALPHAGENOME_DEFAULT_CONDITION)
+        try:
+            from alphagenome.models.v2 import model_condition  # optional extra
+        except ImportError:
+            model_condition = None
+        if model_condition is not None:
+            bad = []
+            for r in read_tsv(ag.ROOT / "panels/gene_tissue.tsv"):
+                try:
+                    model_condition.from_curies(r["condition"].split("_"))
+                except Exception:  # noqa: BLE001
+                    bad.append(r["condition"])
+            check("every tissue CURIE parses", not bad)
+
+        # --- Phase 6: structural variants ----------------------------------------------------
+        sv = {"chrom": "17", "start": 43090000, "end": 43095000, "svtype": "DEL", "svlen": 5001}
+        check("5 kb deletion is scorable", ag.sv_scorable(sv))
+        check("inversion is not", not ag.sv_scorable({**sv, "svtype": "INV"}))
+        check("event above the verified size is not",
+              not ag.sv_scorable({**sv, "end": sv["start"] + ag.SV_MAX_BP + 10}))
+        config.SAMPLES_TSV.write_text("sample_id\nS1\nS2\nS3\n")
+        svfake = Fake(shift=0.1)
+        ag._create_client = svfake
+        Fake.built = 0
+        pred, note = ag.sv_predictions("S1", [(sv, "BRCA1")], fetch=lambda c, s, e: "A" * (e - s + 1))
+        check("SV: one non-consenting family member -> nothing sent",
+              Fake.built == 0 and "external_scoring" in note and not pred)
+        consent.set_consent("S3", cat, True)
+        pred, note = ag.sv_predictions("S1", [(sv, "BRCA1")], fetch=lambda c, s, e: "A" * (e - s + 1))
+        sent = svfake.calls[-1][0]
+        check("SV: deletion sent as reference + anchor-base alternate",
+              len(sent["ref_seq"]) == 5001 and sent["alt_seq"] == "A")
+        check("SV: egress log records that sequence was sent",
+              read_tsv(config.ALPHAGENOME_EGRESS_FILE)[-1]["payload"].startswith("reference sequence"))
+        check("SV: no sequence is stored in the long table",
+              "AAAAAAAAAA" not in config.ALPHAGENOME_LONG_FILE.read_text())
+        check("SV: signed own-gene prediction with tissue",
+              pred.get(("17", 43090000, 43095000, "DEL", "BRCA1"), "").startswith("-0.700")
+              and "mammary epithelium" in pred[("17", 43090000, 43095000, "DEL", "BRCA1")])
+    finally:
+        for n, v in saved.items():
+            setattr(config, n, v)
+        ag._create_client, ag.time = saved_factory, saved_time
+        em._table, em._calibration = saved_table, saved_cal
+        os.environ.pop("ALPHAGENOME_API_KEY", None)
+        if saved_key is not None:
+            os.environ["ALPHAGENOME_API_KEY"] = saved_key
+
+
 def test_enformer() -> None:
     """Enformer: score-table parse + bands/predicate, and interpret's ref/alt window builder
     (SNV, '-'-encoded deletion, ref-mismatch skip, contig-edge skip)."""
@@ -4834,6 +5052,7 @@ if __name__ == "__main__":
     test_allele_balance()
     test_json_format()
     test_json_consent_revocation()
+    test_alphagenome2()
     print()
     if _failures:
         print(f"{len(_failures)} test(s) FAILED: {_failures}")

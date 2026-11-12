@@ -73,6 +73,9 @@ def set_genomes_root(root: Path | str) -> None:
     global CYRIUS_DIR, PGS_DIR, PLINK2_DIR, LIFTOVER_DIR
     global REF_FASTA, HG38_CHR_FASTA, HG19TOHG38_CHAIN
     global ALPHAMISSENSE_FILE, GNOMAD_CONSTRAINT_FILE, SPLICEAI_SNV_FILE, SPLICEAI_INDEL_FILE
+    global ALPHAGENOME_LONG_FILE
+    global ALPHAGENOME_EGRESS_FILE
+    global ALPHAGENOME_EPOCH_FILE
     global ENFORMER_SCORES_FILE, ENFORMER_CALIBRATION_FILE
 
     GENOMES_ROOT = Path(root).expanduser().resolve()
@@ -116,6 +119,9 @@ def set_genomes_root(root: Path | str) -> None:
     FORCECALL_DIR = GENOMES_ROOT / "forcecalled"
     FC_SITES_DIR = FORCECALL_DIR / "sites"
     INTERPRET_DIR = GENOMES_ROOT / "interpret"
+    ALPHAGENOME_LONG_FILE = INTERPRET_DIR / "alphagenome2_scores_long.tsv"
+    ALPHAGENOME_EGRESS_FILE = INTERPRET_DIR / "alphagenome2_egress.tsv"
+    ALPHAGENOME_EPOCH_FILE = INTERPRET_DIR / "alphagenome2_epoch.json"
     ENFORMER_SCORES_FILE = INTERPRET_DIR / f"{INTERPRET_MODEL}_scores.tsv"
     ENFORMER_CALIBRATION_FILE = INTERPRET_DIR / f"{INTERPRET_MODEL}_calibration.json"
 
@@ -591,19 +597,27 @@ INTERPRET_MODEL = os.environ.get("INTERPRET_MODEL", "enformer")
 # they can't share one image. The worker script is shared — it imports each model's package
 # lazily, only in that model's branch. Built on the box from pipeline/Dockerfile.{model}.
 INTERPRET_MODELS = {
-    "enformer": {"hf": "EleutherAI/enformer-official-rough", "seq_len": 196_608,
+    "enformer": {"transport": "ssh", "hf": "EleutherAI/enformer-official-rough", "seq_len": 196_608,
                  "image": "enformer-worker:latest",
                  "targets": ("https://raw.githubusercontent.com/calico/basenji/master/"
                              "manuscripts/cross2020/targets_human.txt")},
-    "borzoi":   {"hf": "johahi/borzoi-replicate-0", "seq_len": 524_288,
+    "borzoi":   {"transport": "ssh", "hf": "johahi/borzoi-replicate-0", "seq_len": 524_288,
                  "image": "borzoi-worker:latest",
                  "targets": ("https://raw.githubusercontent.com/calico/borzoi/main/"
                              "examples/targets_human.txt")},
 }
+INTERPRET_MODELS["alphagenome2"] = {"transport": "api", "hf": "AlphaGenome 2 ALL_FOLDS",
+    "seq_len": 1_048_576, "image": "", "targets": ""}
+ALPHAGENOME_MAX_CALLS = int(os.environ.get("ALPHAGENOME_MAX_CALLS", "500"))
+ALPHAGENOME_PANEL_ONLY = os.environ.get("ALPHAGENOME_PANEL_ONLY", "1").lower() not in {"0", "false", "no"}
+ALPHAGENOME_DEFAULT_CONDITION = "UBERON:0000178_CL:0001054"
 _M = INTERPRET_MODELS[INTERPRET_MODEL]
 INTERPRET_MODEL_HF = _M["hf"]
 ENFORMER_SEQ_LEN = _M["seq_len"]        # the model's fixed input length (the Mac extracts windows of this)
 INTERPRET_DIR = GENOMES_ROOT / "interpret"
+ALPHAGENOME_LONG_FILE = INTERPRET_DIR / "alphagenome2_scores_long.tsv"
+ALPHAGENOME_EGRESS_FILE = INTERPRET_DIR / "alphagenome2_egress.tsv"
+ALPHAGENOME_EPOCH_FILE = INTERPRET_DIR / "alphagenome2_epoch.json"
 ENFORMER_SCORES_FILE = INTERPRET_DIR / f"{INTERPRET_MODEL}_scores.tsv"   # per-model, by (chrom,pos,ref,alt)
 # Remote GPU box: where the worker image lives and runs. SSH target + a scratch dir on the
 # box for the per-run job/result files, and the persistent HF/model cache (downloaded once).

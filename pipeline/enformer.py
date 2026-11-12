@@ -79,6 +79,10 @@ def _load_calibration() -> dict:
     if config.ENFORMER_CALIBRATION_FILE.exists():
         try:
             data = json.loads(config.ENFORMER_CALIBRATION_FILE.read_text())
+            if config.INTERPRET_MODEL == "alphagenome2":
+                from .alphagenome_client import epoch
+                if data.get("epoch") != epoch().get("id"):
+                    return {}
             # Keep just the sorted null arrays we need for the percentile lookup.
             _calibration = {k: data[k] for k in ("snv", "indel") if data.get(k)}
         except (ValueError, OSError):
@@ -104,6 +108,8 @@ def band(delta_max: float, ref: str, alt: str) -> str:
         if pct >= config.ENFORMER_PCTL_HIGH:
             return "high"
         return "moderate" if pct >= config.ENFORMER_PCTL_MODERATE else "low"
+    if config.INTERPRET_MODEL == "alphagenome2":
+        return "low"  # No validated raw-score cutoffs; calibrate this backend first.
     if delta_max >= config.ENFORMER_DELTA_HIGH:
         return "high"
     return "moderate" if delta_max >= config.ENFORMER_DELTA_MODERATE else "low"
@@ -120,7 +126,7 @@ def label(en, ref: str = "", alt: str = "") -> str:
     if not en:
         return "—"
     delta, _l2, track, desc = en
-    assay = desc.split(":")[0] if desc else f"track {track}"
+    assay = desc if config.INTERPRET_MODEL == "alphagenome2" else (desc.split(":")[0] if desc else f"track {track}")
     pct = percentile(delta, ref, alt) if (ref or alt) else None
     pct_s = f" p{pct:.1f}" if pct is not None else ""
     return f"Δ{delta:.2f}{pct_s} {band(delta, ref, alt)} ({assay})"

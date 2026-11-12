@@ -85,14 +85,18 @@ def record_history(snapshot_id: str) -> int:
         _am, _sa, en = triage.model_lookups(chrom, pos, ref, alt, csq,
                                              have_am, have_sa, have_en)
         band = enformer.band(en[0], ref, alt) if en else None
-        out.append([chrom, pos, ref, alt, snapshot_id, sdate, sig, rev, af, tier, band])
+        model_epoch = None
+        if en and config.INTERPRET_MODEL == "alphagenome2":
+            from .alphagenome_client import epoch
+            model_epoch = epoch().get("id")
+        out.append([chrom, pos, ref, alt, snapshot_id, sdate, sig, rev, af, tier, band, model_epoch])
 
     if out:   # DuckDB's executemany rejects an empty parameter list outright, and a snapshot
         # with no history-relevant variants is a legitimate outcome, not an error.
         con.executemany(
             "INSERT OR REPLACE INTO variant_history (chrom, pos, ref, alt, snapshot_id, "
-            "snapshot_date, clinvar_sig, clinvar_revstat, gnomad_af, acmg_tier, model_band) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?)", out)
+            "snapshot_date, clinvar_sig, clinvar_revstat, gnomad_af, acmg_tier, model_band, model_epoch) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", out)
     con.close()
     log.info("variant_history: %d variants recorded for %s.", len(out), snapshot_id)
     return len(out)
@@ -146,8 +150,12 @@ def record_provenance(snapshot_id: str) -> int:
                 add("spliceai", "SpliceAI masked",
                     f"Δ{sa[0]:.2f} {sa[1]}", "Medium", bool(codes & _ACMG_INSILICO))
             if en:
+                value = enformer.label(en, ref, alt)
+                if config.INTERPRET_MODEL == "alphagenome2":
+                    from .alphagenome_client import epoch, conditions_for
+                    value += f"; condition={conditions_for(gene)[0]['condition']}; epoch={epoch().get('id')}"
                 add("enformer", f"{config.INTERPRET_MODEL}",
-                    enformer.label(en, ref, alt), _conf_enformer(en, ref, alt), False)
+                    value, _conf_enformer(en, ref, alt), False)
             if have_gc and gnomad_constraint.lookup(gene):
                 add("gnomad_constraint", f"gnomAD {config.GNOMAD_CONSTRAINT_VERSION}",
                     gnomad_constraint.label(gene), "Medium", bool(codes & _ACMG_PVS1))

@@ -85,8 +85,11 @@ Settings go in `.env`: `NOTIFY_CMD` (a command run with the scan's summary), `PR
   arcasHLA). From inside a container that needs the host's Docker socket, which is
   root-equivalent on the host, so it is not wired up. Run those two stages from a native
   install against the same data directory.
-- **`interpret`.** It sends jobs to a GPU box over SSH and needs your SSH key and host
-  configuration in the container; not set up by default.
+- **`interpret` on a GPU box.** It sends jobs over SSH and needs your SSH key and host
+  configuration in the container; not set up by default. The AlphaGenome 2 backend needs no
+  SSH. Install the extra in the image (`uv sync --extra alphagenome`) and pass the key at run
+  time with `-e ALPHAGENOME_API_KEY -e INTERPRET_MODEL=alphagenome2`, never baked into the
+  image. The demo never calls the API.
 - **Apple Silicon and other non-x86-64 hosts.**
 
 ## How the image is built

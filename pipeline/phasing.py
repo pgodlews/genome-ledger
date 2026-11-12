@@ -314,3 +314,24 @@ def phase_report(sample: str, force: bool = False) -> Path:
     log.info("Phasing report: %s (%d candidate genes, %d in-trans)",
              summary, len(results), len(trans))
     return summary
+
+
+def phase_pair(sample: str, gene: str, first: dict, second: dict) -> str:
+    """Read-backed phase for one explicit research candidate pair (second-hit stage).
+
+    Unlike `_candidate_genes` this applies no damaging filter: the caller chose the pair."""
+    if str(first["chrom"]) != str(second["chrom"]):
+        return "unknown"
+    import hashlib
+    pair = [{k: v[k] for k in ("pos", "ref", "alt")} | {"csq": "", "sig": v.get("sig")}
+            for v in (first, second)]
+    token = hashlib.sha256(repr((gene, first["chrom"], pair)).encode()).hexdigest()[:16]
+    out_dir = config.PHASE_DIR / sample / f"pair_{token}"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    cg = {"gene": gene, "chrom": str(first["chrom"]), "variants": pair}
+    result = _verdict(cg, _parse_phased(_run_whatshap(sample, [cg], out_dir)))
+    if result["in_trans"]:
+        return "trans (read-backed)"
+    if result["verdict"].startswith("in-cis"):
+        return "cis (read-backed)"
+    return "unknown"

@@ -94,6 +94,13 @@ durable layers.
 
 ---
 
+### Hosted models can disappear
+
+The AlphaGenome 2 backend runs on a hosted service with no versioned model, and the service
+can change or be withdrawn. Scores already cached under `interpret/` stay usable: the long
+table keeps every row with its epoch. Enformer and Borzoi remain the fully local path. Keep
+the egress log with the rest of the data; it records what was shared.
+
 ## 4. Operability handoff (an heir is not necessarily a bioinformatician)
 
 - **Successor runbook** — `docs/runbook.md` is the starting point: what this is, where the
