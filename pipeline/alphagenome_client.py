@@ -262,7 +262,7 @@ def establish_epoch(session):
     return eid
 
 
-def eligible(snapshot, variants):
+def eligible(snapshot, variants, *, panel_only=None):
     """Re-query all carriers before egress, independent of rare/consequence/gene filters."""
     import duckdb
     from .panel import load_panel
@@ -271,7 +271,7 @@ def eligible(snapshot, variants):
     allowed, withheld = [], 0
     try:
         for v in variants:
-            if config.ALPHAGENOME_PANEL_ONLY and v.get('gene') not in panel:
+            if panel_only and v.get('gene') not in panel:
                 continue
             chrom, pos, ref, alt = key(v)
             if (chrom not in LENGTHS or pos - 1 - 524288 < 0 or
@@ -292,8 +292,12 @@ def eligible(snapshot, variants):
     return allowed, withheld
 
 
-def score_selected(snapshot, variants, *, dry_run=False):
-    allowed, withheld = eligible(snapshot, variants)
+def score_selected(snapshot, variants, *, dry_run=False, panel_only=None):
+    # The calibration null is common variants genome-wide; a panel filter would leave almost
+    # none of them, so run_snapshot passes panel_only=False for --calibrate.
+    if panel_only is None:
+        panel_only = config.ALPHAGENOME_PANEL_ONLY
+    allowed, withheld = eligible(snapshot, variants, panel_only=panel_only)
     requests = [(v, c) for v in allowed for c in conditions_for(v.get('gene'))]
     if dry_run:
         print(f'AlphaGenome dry run: {len(allowed)} eligible variants; {withheld} withheld for consent.')
@@ -356,7 +360,8 @@ def run_snapshot(snapshot, *, calibrate=False, dry_run=False, force=False):
     config.INTERPRET_DIR.mkdir(parents=True, exist_ok=True)
     with (config.INTERPRET_DIR / 'alphagenome2.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        allowed, withheld = score_selected(snapshot, variants, dry_run=dry_run)
+        allowed, withheld = score_selected(snapshot, variants, dry_run=dry_run,
+                                           panel_only=False if calibrate else None)
         if dry_run:
             return config.INTERPRET_DIR
         scored = []

@@ -2262,6 +2262,14 @@ def test_alphagenome2() -> None:
             config.INTERPRET_MODEL, config.INTERPRET_MAX_VARIANTS = saved_model, saved_cap
             config.ALPHAGENOME_PANEL_ONLY = True
 
+        # --- calibration null is not panel-filtered ---------------------------------------
+        common = {"chrom": "1", "pos": 1_000_000, "ref": "A", "alt": "G", "gene": "NOTPANEL"}
+        consent.set_consent("S1", cat, True)
+        allowed, _ = ag.score_selected("snap", [common], dry_run=True)
+        check("panel-only run skips a non-panel variant", allowed == [])
+        allowed, _ = ag.score_selected("snap", [common], dry_run=True, panel_only=False)
+        check("calibration (panel_only=False) keeps a non-panel null variant", allowed == [common])
+
         # --- tissue mapping ------------------------------------------------------------------
         mapped = {r["gene"] for r in read_tsv(ag.ROOT / "panels/gene_tissue.tsv")}
         panel_genes = {g for d in load_panel() for g in d.genes}
