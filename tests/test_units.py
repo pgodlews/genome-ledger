@@ -2237,6 +2237,31 @@ def test_alphagenome2() -> None:
             check("cap below the sentinel count is refused", True)
         config.ALPHAGENOME_MAX_CALLS = 500
 
+        # --- selection: panel filter before the cap ---------------------------------------
+        from pipeline import interpret as it
+        csq = config.INTERPRET_CONSEQUENCES[0]
+        con = duckdb.connect(str(config.DUCKDB_FILE))
+        con.execute("ALTER TABLE variants ADD COLUMN IF NOT EXISTS consequence VARCHAR")
+        con.execute("ALTER TABLE variants ADD COLUMN IF NOT EXISTS gnomad_af DOUBLE")
+        con.execute("UPDATE variants SET consequence=?, gnomad_af=0.001", [csq])
+        for i in range(5):   # rarer, non-panel variants that used to fill the whole cap
+            con.execute("INSERT INTO variants VALUES ('snap','S1','1',?,'A','G','HET','NOTPANEL',?,NULL)",
+                        [1_000_000 + i, csq])
+        con.close()
+        saved_model, saved_cap = config.INTERPRET_MODEL, config.INTERPRET_MAX_VARIANTS
+        config.INTERPRET_MODEL, config.INTERPRET_MAX_VARIANTS = "alphagenome2", 2
+        try:
+            got = it._select_variants("snap", set())
+            check("panel variants are selected despite rarer non-panel ones",
+                  {v["gene"] for v in got} == {"BRCA1"} and len(got) == 4)
+            config.ALPHAGENOME_PANEL_ONLY = False
+            check("API transport ignores the GPU batch cap", len(it._select_variants("snap", set())) == 9)
+            config.INTERPRET_MODEL = "enformer"
+            check("GPU transport keeps its cap", len(it._select_variants("snap", set())) == 2)
+        finally:
+            config.INTERPRET_MODEL, config.INTERPRET_MAX_VARIANTS = saved_model, saved_cap
+            config.ALPHAGENOME_PANEL_ONLY = True
+
         # --- tissue mapping ------------------------------------------------------------------
         mapped = {r["gene"] for r in read_tsv(ag.ROOT / "panels/gene_tissue.tsv")}
         panel_genes = {g for d in load_panel() for g in d.genes}

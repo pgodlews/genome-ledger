@@ -67,13 +67,23 @@ def _select_variants(snapshot: str, already: set) -> list[dict]:
         priority = {(r["chrom"], int(r["pos"]), r["ref"], r["alt"])
                     for p in config.DENOVO_DIR.glob("*/confirmed.tsv") for r in read_tsv(p)}
         rows.sort(key=lambda r: (str(r[0]), int(r[1]), r[2], r[3]) not in priority)
+    # AlphaGenome 2: the panel filter must come BEFORE any cap, or the genome-wide rarest
+    # variants crowd every panel gene out. Its budget is ALPHAGENOME_MAX_CALLS (resumable
+    # across runs), so INTERPRET_MAX_VARIANTS, a GPU-batch limit, does not apply.
+    api = config.INTERPRET_MODELS[config.INTERPRET_MODEL]["transport"] == "api"
+    panel = None
+    if api and config.ALPHAGENOME_PANEL_ONLY:
+        from .panel import load_panel
+        panel = {g for d in load_panel() for g in d.genes}
     out = []
     for r in rows:
         d = dict(zip(cols, r))
         if (str(d["chrom"]), int(d["pos"]), d["ref"], d["alt"]) in already:
             continue
+        if panel is not None and d.get("gene") not in panel:
+            continue
         out.append(d)
-        if len(out) >= config.INTERPRET_MAX_VARIANTS:
+        if not api and len(out) >= config.INTERPRET_MAX_VARIANTS:
             break
     return out
 
