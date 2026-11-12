@@ -2165,6 +2165,8 @@ def test_alphagenome2() -> None:
               ag.summary(rows, "BRCA1") == (0.8, "RNA_SEQ"))
         check("gene absent -> DNase fallback", ag.summary(rows, "NOTHERE") == (1.5, "DNASE"))
         check("no rows -> None", ag.summary([], "BRCA1") is None)
+        check("variants render as chrom:pos ref>alt, not a tuple",
+              ag.fmt({"chrom": "chr17", "pos": "43100000", "ref": "-", "alt": "A"}) == "17:43100000 ->A")
 
         # --- consent, dry run, no key: never build a client ---------------------------------
         fake = Fake()

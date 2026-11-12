@@ -85,7 +85,7 @@ def second_hit(snapshot, *, dry_run=False, phase=False):
            '|---|---|---|---|---|---|---|']
     for v in candidates:
         lines.append(f'| {v["sample"]} | {v["gene"]} / {ag.conditions_for(v["gene"])[0]["label"]} | '
-                     f'{ag.key(v["known"])} | {ag.key(v)} | {v["phase"]} | '
+                     f'{ag.fmt(v["known"])} | {ag.fmt(v)} | {v["phase"]} | '
                      f'{v["expression"] if v["expression"] is not None else "unscored"} | {v["splice"]} |')
     dest=reportpaths.family_report('second_hit',snapshot)
     write_report(dest,lines)

@@ -48,6 +48,12 @@ def key(v):
     return (str(v['chrom']).removeprefix('chr'), int(v['pos']), v['ref'], v['alt'])
 
 
+def fmt(v):
+    """Human-readable variant, the form the other reports use: `17:43100000 ->A`."""
+    chrom, pos, ref, alt = key(v)
+    return f'{chrom}:{pos} {ref}>{alt}'
+
+
 def _atomic(path, text):
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f'{path.name}.{os.getpid()}.part')
@@ -302,7 +308,7 @@ def score_selected(snapshot, variants, *, dry_run=False, panel_only=None):
     if dry_run:
         print(f'AlphaGenome dry run: {len(allowed)} eligible variants; {withheld} withheld for consent.')
         for v, c in requests:
-            print(f'{key(v)}\t{c["condition"]}\t{c["label"]}')
+            print(f'{fmt(v)}\t{c["condition"]}\t{c["label"]}')
         print(f'Up to {len(requests) + (5 if requests else 0)} initial calls including public sentinels; '
               f'cap {config.ALPHAGENOME_MAX_CALLS} counts retries. Cached current-epoch requests are skipped '
               'after live sentinel verification. No channel opened.')
@@ -390,7 +396,7 @@ def run_snapshot(snapshot, *, calibrate=False, dry_run=False, force=False):
                  '|---|---|---|---|']
         for v in sorted(scored, key=lambda v: -v['delta_max']):
             en = enformer.lookup(*key(v))
-            lines.append(f'| {key(v)} | {v.get("gene", "")} | {enformer.label(en,v["ref"],v["alt"])} | '
+            lines.append(f'| {fmt(v)} | {v.get("gene", "")} | {enformer.label(en,v["ref"],v["alt"])} | '
                          f'{splice_label(*key(v),v.get("gene"),v.get("consequence"))} |')
         write_report(dest, lines)
         return dest
