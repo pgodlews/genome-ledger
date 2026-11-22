@@ -21,10 +21,11 @@ Two deliberate choices about the evidence:
 
 from __future__ import annotations
 
+from collections import Counter
 from pathlib import Path
 
 from . import reportpaths, theme
-from . import allele_balance, clinsig, config
+from . import allele_balance, clinsig, config, sexchrom
 from .load import TABLE, connect
 from .snapshot import latest_snapshot
 from .util import log
@@ -33,11 +34,15 @@ from .util import log
 # claim: a resolved parental origin, then the two states that are inferences about absence.
 FROM_FATHER, FROM_MOTHER, FROM_BOTH = "father", "mother", "both"
 DE_NOVO, UNRESOLVED, FOUNDER = "de_novo", "unresolved", "founder"
+# Every callset that found it says two copies, but only one parent has a call.
+FATHER_ONLY, MOTHER_ONLY = "father_only", "mother_only"
 
 ORIGIN_LABEL = {
     FROM_FATHER: "from father",
     FROM_MOTHER: "from mother",
     FROM_BOTH: "from both parents",
+    FATHER_ONLY: "only father has a call, second copy unexplained",
+    MOTHER_ONLY: "only mother has a call, second copy unexplained",
     DE_NOVO: "de-novo candidate",
     UNRESOLVED: "unresolved",
     FOUNDER: "origin not traceable",
@@ -83,8 +88,13 @@ def collect(snap: str, fam) -> list[dict]:
     con = connect()
     try:
         rows = _rows(con, snap)
+        # The denominator of "found in n of m": a callset this snapshot never scanned did
+        # not disagree with anything.
+        scanned = Counter(fam.person_of(r[0]) for r in con.execute(
+            f"SELECT DISTINCT sample_id FROM {TABLE} WHERE snapshot_id = ?", [snap]).fetchall())
     finally:
         con.close()
+    rows = [r for r in rows if not sexchrom.is_alternate_mt(r[0], r[1], fam)]
 
     keys_by_sid: dict[str, list] = {}
     for sid, chrom, pos, ref, alt, *_ in rows:
@@ -101,7 +111,8 @@ def collect(snap: str, fam) -> list[dict]:
         })
         person = fam.person_of(sid)
         z = (zyg or "").upper()
-        c = v["carriers"].setdefault(person, {"zyg": z, "callsets": {}, "low_ab": None})
+        c = v["carriers"].setdefault(person, {"zyg": z, "callsets": {}, "low_ab": None,
+                                              "n_callsets": scanned[person]})
         c["callsets"][sid] = z
         frac = ab.get(sid, {}).get(key)
         if allele_balance.is_low(z, frac) and (
@@ -128,12 +139,27 @@ def origin(variant: dict, person: str, fam) -> str:
     if not (fam.is_sequenced(father) and fam.is_sequenced(mother)):
         return UNRESOLVED
     f, m = father in carriers, mother in carriers
+    key = variant.get("key")
+    kind = sexchrom.locus_kind(key[0], key[1]) if key else sexchrom.AUTOSOMAL
+    # Only the autosomal case below can name a de-novo candidate: the `denovo` stage that
+    # settles one covers autosomes only, and on X, Y and MT a parent can be ruled out by biology.
+    if kind == sexchrom.MITOCHONDRIAL:
+        return FROM_MOTHER if m else UNRESOLVED
+    if kind == sexchrom.Y_LINKED:
+        return FROM_FATHER if f and sexchrom.is_male(p.sex) else UNRESOLVED
+    if kind == sexchrom.X_LINKED:
+        if sexchrom.is_male(p.sex):
+            return FROM_MOTHER if m else UNRESOLVED
+        if not sexchrom.is_female(p.sex) or not (f or m):
+            return UNRESOLVED
     if f and m:
         return FROM_BOTH
-    if f:
-        return FROM_FATHER
-    if m:
-        return FROM_MOTHER
+    if f or m:
+        # A two-copy call needs a source for each copy. If the callsets disagree on the copy
+        # count, one copy from this parent still fits, and `copy_state` shows the split.
+        if set(carriers[person]["callsets"].values()) == {"HOM"}:
+            return FATHER_ONLY if f else MOTHER_ONLY
+        return FROM_FATHER if f else FROM_MOTHER
     return DE_NOVO
 
 
@@ -144,9 +170,70 @@ def discordant(variant: dict, fam) -> list[str]:
     is the reason a de-novo candidate most often evaporates under `pipeline/denovo.py`."""
     out = []
     for person, c in variant["carriers"].items():
-        if len(c["callsets"]) < len(fam.callsets(person)):
+        if len(c["callsets"]) < _n_callsets(c, person, fam):
             out.append(person)
     return out
+
+
+def _n_callsets(carrier: dict, person: str, fam) -> int:
+    """Callsets the snapshot scanned for this person, or all they have if not recorded."""
+    return carrier.get("n_callsets") or len(fam.callsets(person))
+
+
+def callset_support(carrier: dict, person: str, fam) -> str:
+    """How many of this person's callsets found the variant, as "2/3".
+
+    Empty for a person with a single callset, where "1/1" would add nothing but a question."""
+    total = _n_callsets(carrier, person, fam)
+    return f"{len(carrier['callsets'])}/{total}" if total > 1 else ""
+
+
+def copies_split(carrier: dict) -> str:
+    """"two copies in 1, one copy in 2" when the callsets disagree on zygosity, else empty.
+
+    `collect` lets HOM outrank HET, so without this a call that is HOM in one callset and
+    HET in the others reads as two copies with full callset support."""
+    zygs = list(carrier["callsets"].values())
+    hom, het = zygs.count("HOM"), zygs.count("HET")
+    return f"two copies in {hom}, one copy in {het}" if hom and het else ""
+
+
+def copy_state(variant: dict, person: str, fam) -> dict:
+    """What can honestly be said about how many copies `person` has.
+
+    {"n": the short badge, "label": the sentence opener, "text": the zygosity word}. A male's
+    non-PAR X or Y is one copy even when the caller wrote 1/1, and mtDNA has a heteroplasmy
+    level rather than a copy count."""
+    c = variant["carriers"][person]
+    key = variant.get("key")
+    kind = sexchrom.locus_kind(key[0], key[1]) if key else sexchrom.AUTOSOMAL
+    p = fam.people.get(person)
+    if kind == sexchrom.MITOCHONDRIAL:
+        return {"n": "mt", "label": "Mitochondrial, see the mito report",
+                "text": "mitochondrial"}
+    if kind in (sexchrom.X_LINKED, sexchrom.Y_LINKED) and p and sexchrom.is_male(p.sex):
+        return {"n": "1", "label": "One copy (hemizygous)", "text": "hemizygous"}
+    split = copies_split(c)
+    if split:
+        return {"n": "1–2", "label": "One or two copies", "text": split}
+    if c["zyg"] == "HOM":
+        return {"n": "2", "label": "Two copies", "text": "homozygous"}
+    return {"n": "1", "label": "One copy", "text": "heterozygous"}
+
+
+def caveats(variant: dict, fam) -> str:
+    """Partial callset support and low allele fractions, for the tree's caption."""
+    out = []
+    for person, c in variant["carriers"].items():
+        bits = []
+        if len(c["callsets"]) < _n_callsets(c, person, fam):
+            bits.append(f"{callset_support(c, person, fam)} callsets")
+        if c.get("low_ab"):
+            bits.append("low AF")
+        if bits:
+            name = fam.people[person].display_name if person in fam.people else person
+            out.append(f"{name}: {', '.join(bits)}")
+    return "; ".join(out)
 
 
 # --- tree layout --------------------------------------------------------------
@@ -357,20 +444,22 @@ function overview(){
 function show(i){
   clear(); rows.forEach((r,j)=>r.classList.toggle('sel', i===j));
   const v = V[i], d = disease(v.disease);
-  cap.textContent = v.gene+' '+v.label+' \u2014 '+v.sig.replace(/_/g,' ')+(d ? ' \u00b7 '+d : '');
+  cap.textContent = v.gene+' '+v.label+' \u2014 '+v.sig.replace(/_/g,' ')+(d ? ' \u00b7 '+d : '')
+    +(v.caveats ? ' \u00b7 '+v.caveats : '');
   for (const p of PEOPLE){
     const c = v.carriers[p];
-    const g = badge(p, c ? (c.zyg==='HOM' ? '2' : '1') : '');
+    const g = badge(p, c ? c.n : '');
     if (!g) continue;
     // classList.add('') throws (empty token) and would abort this loop at the first
     // non-carrier, leaving the rest of the tree showing the previous selection.
-    const cls = c ? (c.zyg==='HOM' ? 'hom' : 'het') : (v.unknown.includes(p) ? 'unk' : '');
+    const cls = c ? (c.n==='2' ? 'hom' : 'het') : (v.unknown.includes(p) ? 'unk' : '');
     if (cls) g.classList.add(cls);
     if (!c) continue;
     const e = document.getElementById('e-'+p);
     if (!e) continue;
     if (v.origin[p]==='de_novo'){ g.classList.add('dn'); e.classList.add('dn'); }
-    else if (['father','mother','both'].includes(v.origin[p])) e.classList.add('on');
+    else if (['father','mother','both','father_only','mother_only'].includes(v.origin[p]))
+      e.classList.add('on');
   }
 }
 rows.forEach((r,i)=>r.addEventListener('click',()=>show(i)));
@@ -398,21 +487,22 @@ def _table(variants: list[dict], fam) -> str:
             if not c:
                 continue
             dn = fam.people[pid].display_name
-            # "(1/2)" — called by one of this person's two callsets. Terser than naming the
+            # "1/2" — called by one of this person's two callsets. Terser than naming the
             # callers and it is the number that matters: partial support is the page's own
             # confidence signal, and the T2T-lifted calls disagree often enough that
             # spelling it out per name buried the table.
-            total = len(fam.callsets(pid))
-            frac = (f' <span class="pill" title="called by {len(c["callsets"])} of '
-                    f'{total} callsets">{len(c["callsets"])}/{total}</span>'
-                    if total > 1 and len(c["callsets"]) < total else "")
+            support = callset_support(c, pid, fam)
+            frac = (f' <span class="pill" title="called by {support.replace("/", " of ")} '
+                    f'callsets">{support}</span>' if support else "")
             low = ""
             if c.get("low_ab"):
                 a, n = c["low_ab"]
                 low = (f' <span class="pill low" title="only {a} of {n} reads carry the '
                        f'variant; a real het sits near 50% — likely sequencing or mapping '
                        f'artifact, review">low AF {a}/{n}</span>')
-            who.append(f"{_esc(dn)}{' (hom)' if c['zyg'] == 'HOM' else ''}{frac}{low}")
+            text = copy_state(v, pid, fam)["text"]
+            zyg = "" if text == "heterozygous" else f" ({_esc(text)})"
+            who.append(f"{_esc(dn)}{zyg}{frac}{low}")
             o = origin(v, pid, fam)
             if o and o != FOUNDER:
                 cls = ' class="pill dn"' if o == DE_NOVO else ' class="pill"'
@@ -437,9 +527,11 @@ def write_markdown(snap: str, variants: list[dict], fam) -> Path:
         out = []
         for p, c in v["carriers"].items():
             name = fam.people[p].display_name if p in fam.people else p
-            zyg = "homozygous" if c["zyg"] == "HOM" else "heterozygous"
+            zyg = copy_state(v, p, fam)["text"]
+            support = callset_support(c, p, fam)
+            found_in = f", found in {support} callsets" if support else ""
             low = ", low allele fraction" if c.get("low_ab") else ""
-            out.append(f"{name} ({zyg}, {ORIGIN_LABEL[origin(v, p, fam)]}{low})")
+            out.append(f"{name} ({zyg}, {ORIGIN_LABEL[origin(v, p, fam)]}{found_in}{low})")
         return "; ".join(out)
 
     unseq = [fam.people[p].display_name for p in fam.people if not fam.is_sequenced(p)]
@@ -506,8 +598,10 @@ def build_page(snap: str | None = None, out_dir: Path | None = None) -> Path:
     # rather than as a non-carrier.
     payload = [{
         "label": v["label"], "gene": v["gene"], "sig": v["sig"], "disease": v["disease"],
-        "carriers": {p: {"zyg": c["zyg"]} for p, c in v["carriers"].items()},
+        "carriers": {p: {"zyg": c["zyg"], "n": copy_state(v, p, fam)["n"]}
+                     for p, c in v["carriers"].items()},
         "origin": {p: origin(v, p, fam) for p in v["carriers"]},
+        "caveats": caveats(v, fam),
         "unknown": [p for p in people if not fam.is_sequenced(p)],
     } for v in variants]
 
@@ -537,7 +631,8 @@ def build_page(snap: str | None = None, out_dir: Path | None = None) -> Path:
         f"{len(variants)} ClinVar pathogenic / likely-pathogenic variant(s) carried by "
         f"someone in this family. Click a row to trace it through the tree."
         + (f" {n_disc} of them are called by only some of a carrier's callsets "
-           f"(the <code>n/m</code> marker) — treat those as the least certain rows."
+           f"(an <code>n/m</code> marker with n below m) — treat those as the least "
+           f"certain rows."
            if n_disc else "")
         + f" A <span class=\"pill low\">low AF</span> marker means fewer than "
         f"{config.LOW_VAF_THRESHOLD:.0%} of that person's reads carry the variant, where a "

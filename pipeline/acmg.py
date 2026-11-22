@@ -31,7 +31,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from . import reportpaths
-from . import allele_balance, alphamissense, config, gnomad_constraint, limitations, spliceai
+from . import (allele_balance, alphamissense, config, gnomad_constraint, limitations, pedigree,
+               sexchrom, spliceai)
 from .load import TABLE, connect
 from .panel import load_panel, sql_in_list
 from .snapshot import load_manifest
@@ -253,6 +254,7 @@ def acmg_report(snapshot_id: str) -> list[Path]:
     samples = [r[0] for r in con.execute(
         f"SELECT DISTINCT sample_id FROM {TABLE} WHERE snapshot_id = ? ORDER BY 1",
         [snapshot_id]).fetchall()]
+    fam = pedigree.load(sequenced=set(samples))
 
     for sample in samples:
         rows = con.execute(f"""
@@ -261,6 +263,7 @@ def acmg_report(snapshot_id: str) -> list[Path]:
             FROM {TABLE}
             WHERE snapshot_id = ? AND sample_id = ? AND gene IN ({gene_list})
         """, [snapshot_id, sample]).fetchall()
+        rows = [r for r in rows if not sexchrom.is_alternate_mt(sample, r[1], fam)]
 
         calls = []
         large_indel = 0

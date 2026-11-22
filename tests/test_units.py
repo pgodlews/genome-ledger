@@ -870,6 +870,195 @@ def test_inheritance_origin() -> None:
                                  "callsets": {"Dad": "HET", "Dad_t2t": "HET"}}}}
     check("full callset support is not flagged", inh.discordant(both, f) == [])
 
+    # Callset support is shown for anyone with several callsets, and never as "1/1".
+    partial_c, both_c = partial["carriers"]["Dad"], both["carriers"]["Dad"]
+    kid_c = v("Kid")["carriers"]["Kid"]
+    check("partial support reads n/m", inh.callset_support(partial_c, "Dad", f) == "1/2")
+    check("full support is still stated", inh.callset_support(both_c, "Dad", f) == "2/2")
+    check("a single callset states nothing", inh.callset_support(kid_c, "Kid", f) == "")
+
+    row = {"key": ("1", 100, "A", "G"), "label": "1:100 A>G", "gene": "GENE1", "sig": "Pathogenic",
+           "disease": "", "af": None, "csq": "",
+           "carriers": {"Dad": {**partial_c, "low_ab": None}, "Kid": {**kid_c, "low_ab": None}}}
+    table = inh._table([row], f)
+    check("the inheritance table shows the n/m pill", ">1/2</span>" in table)
+    check("the inheritance table has no pill for one callset", "1/1" not in table)
+
+    from pipeline import dashboard
+    two = {"n": "2", "label": "Two copies", "text": "homozygous"}
+    card = lambda support, state=two: dashboard.findings_card([{
+        **row, "zyg": "HOM", "origin": "from mother", "support": support,
+        "copies": state, "low_ab": None}], False)
+    check("the dashboard states callset support",
+          "Two copies, from mother. Found in 1/3 callsets." in card("1/3"))
+    check("the dashboard says nothing for one callset", "callsets" not in card(""))
+
+    # HOM in one callset and HET in the others is not "two copies, 3/3".
+    disputed = {"zyg": "HOM", "low_ab": None,
+                "callsets": {"Dad": "HET", "Dad_t2t": "HOM", "Dad_vendor": "HET"}}
+    split = inh.copies_split(disputed)
+    check("disagreeing callsets are spelled out", split == "two copies in 1, one copy in 2")
+    check("agreeing callsets are not", inh.copies_split(both_c) == "")
+    disputed_row = {**row, "carriers": {"Dad": disputed}}
+    shown = card("3/3", inh.copy_state(disputed_row, "Dad", f))
+    check("the dashboard does not claim two copies on a split call",
+          "One or two copies, from mother. Found in 3/3 callsets: two copies in 1, "
+          "one copy in 2." in shown and "Two copies" not in shown)
+    check("the inheritance table spells out a split call",
+          f"({split})" in inh._table([disputed_row], f))
+
+
+def test_callset_and_sex_aware_evidence() -> None:
+    """One genome called several times is one person, and X, Y and MT follow their own rules."""
+    print("callset merging and sex-chromosome evidence:")
+    import tempfile
+    from pathlib import Path
+    from unittest.mock import patch
+
+    import duckdb
+
+    from pipeline import (config, dashboard, denovo, diff, inheritance as inh, panel, repeats,
+                          segregation as seg, sexchrom)
+    from pipeline.pedigree import Family, Person
+
+    people = {
+        "Dad": Person("Dad", "Dad", "male", None, None, "Mum"),
+        "Mum": Person("Mum", "Mum", "female", None, None, "Dad"),
+        "Son": Person("Son", "Son", "male", "Dad", "Mum", None),
+        "Girl": Person("Girl", "Girl", "female", "Dad", "Mum", None),
+    }
+    f = Family(people, sequenced={"Dad", "Mum", "Son", "Son_vendor", "Son_t2t", "Girl"})
+
+    def var(chrom, pos, **calls):
+        return {"key": (chrom, pos, "A", "G"), "carriers": {
+            p: {"zyg": "HOM" if "HOM" in z else "HET",
+                "callsets": {p + ("" if i == 0 else f"_{i}"): x for i, x in enumerate(z)},
+                "low_ab": None} for p, z in calls.items()}}
+
+    check("X inside PAR1 is autosomal", sexchrom.locus_kind("X", 2781479) == sexchrom.AUTOSOMAL)
+    check("X just past PAR1 is X-linked", sexchrom.locus_kind("chrX", 2781480) == sexchrom.X_LINKED)
+    check("chrM is mitochondrial", sexchrom.locus_kind("chrM", 100) == sexchrom.MITOCHONDRIAL)
+
+    x = 5_000_000
+    check("a son's X cannot come from his father",
+          inh.origin(var("X", x, Son=["HET"], Dad=["HET"]), "Son", f) == inh.UNRESOLVED)
+    check("a son's X comes from his mother",
+          inh.origin(var("X", x, Son=["HOM"], Mum=["HET"]), "Son", f) == inh.FROM_MOTHER)
+    check("a son's PAR variant can come from his father",
+          inh.origin(var("X", 100_000, Son=["HET"], Dad=["HET"]), "Son", f) == inh.FROM_FATHER)
+    check("no parental X call is not a de-novo candidate",
+          inh.origin(var("X", x, Girl=["HET"]), "Girl", f) == inh.UNRESOLVED)
+    check("MT cannot come from the father",
+          inh.origin(var("MT", 100, Son=["HOM"], Dad=["HOM"]), "Son", f) == inh.UNRESOLVED)
+    check("Y comes from the father",
+          inh.origin(var("Y", 5_000_000, Son=["HOM"], Dad=["HOM"]), "Son", f) == inh.FROM_FATHER)
+    check("two copies with one carrier parent is called out",
+          inh.origin(var("7", 100, Son=["HOM"], Mum=["HOM"]), "Son", f) == inh.MOTHER_ONLY)
+    check("a split call with one carrier parent can still be one copy from them",
+          inh.origin(var("7", 100, Son=["HOM", "HET"], Mum=["HET"]), "Son", f) == inh.FROM_MOTHER)
+
+    hemi = var("X", x, Son=["HOM", "HET"])
+    check("a male's X is one copy, even when a callset wrote 1/1",
+          inh.copy_state(hemi, "Son", f)["label"] == "One copy (hemizygous)")
+    check("a female's X keeps diploid wording",
+          inh.copy_state(var("X", x, Girl=["HOM"]), "Girl", f)["n"] == "2")
+    check("MT has no copy count",
+          inh.copy_state(var("MT", 100, Son=["HOM"]), "Son", f)["n"] == "mt")
+    scanned = {"zyg": "HET", "callsets": {"Son": "HET", "Son_vendor": "HET"}, "n_callsets": 2}
+    check("a callset the snapshot never scanned is not in the denominator",
+          inh.callset_support(scanned, "Son", f) == "2/2")
+    check("lifted chrM is excluded", sexchrom.is_alternate_mt("Son_vendor", "MT", f))
+    check("the primary callset's chrM stays", not sexchrom.is_alternate_mt("Son", "MT", f))
+
+    check("reads contradicting a VCF call make it unknown",
+          seg.parent_status(True, ("absent", "0 alt of 30"))[0] == "unknown")
+    check("reads supporting a VCF call keep it",
+          seg.parent_status(True, ("carries", "15 alt"))[0] == "carries")
+    check("unresolvable reads do not overturn a VCF call",
+          seg.parent_status(True, ("unknown", "low depth"))[0] == "carries")
+    check("no reads leaves a VCF call standing", seg.parent_status(True, None)[0] == "carries")
+    check("no reads leaves an absence unknown", seg.parent_status(False, None)[0] == "unknown")
+    check("reads confirm an absence", seg.parent_status(False, ("absent", "d"))[0] == "absent")
+
+    index: dict = {}
+    for callset, status in (("Son", panel._CARRIER), ("Son_vendor", panel._CARRIER)):
+        panel.index_ar_status(index, "GENE1", f.person_of(callset), status)
+    check("one person's callsets are not a couple",
+          panel.family_risk_rows([panel._Disease("D", ["GENE1"], "AR", "")], index) == [])
+    low = {"gene": "GENE1", "label": "1:100 A>G", "zyg": "HET", "rev": "", "sig": "Pathogenic",
+           "ab": (2, 19)}
+    check("the panel shows the low-allele-fraction warning",
+          "low allele fraction 2/19" in panel._row_md(
+              panel._Disease("D", ["GENE1"], "AD", ""), panel._ATRISK, [low]))
+
+    def finding(sample, tier="actionable_now", score=0.9, zyg="HET", chrom="1"):
+        return {"sample": sample, "chrom": chrom, "pos": 100, "ref": "A", "alt": "G",
+                "tier": tier, "score": score, "zyg": zyg}
+    rows = diff.by_person([finding("Son"), finding("Son_vendor", "monitor", 0.5)], f, {"Son": 3})
+    check("DELTA gives one row per person and variant",
+          len(rows) == 1 and rows[0]["sample"] == "Son" and rows[0]["support"] == "2/3")
+    check("DELTA keeps the strongest tier", rows[0]["tier"] == "actionable_now")
+    rows = diff.by_person([finding("Son_t2t")], f, {"Son": 3})
+    check("a T2T-only change cannot be actionable",
+          rows[0]["tier"] == "monitor" and rows[0]["t2t_only"])
+    check("DELTA drops lifted chrM",
+          diff.by_person([finding("Son_vendor", chrom="MT")], f, {"Son": 3}) == [])
+    key = ("1", 100, "A", "G")
+    check("DELTA shows the weakest low-fraction het",
+          "2/19" in diff._zyg_cell({"chrom": "1", "pos": 100, "ref": "A", "alt": "G",
+                                    "calls": {"Son": "HET", "Son_vendor": "HET"}},
+                                   {"Son": {key: (20, 40)}, "Son_vendor": {key: (2, 19)}}))
+
+    tables = {"Son": ([["Risk", "s", "GENE1"]], [["Carrier", "s", "GENE2"]]),
+              "Son_vendor": ([["Risk", "s", "GENE1"]], [["Risk", "s", "GENE1"],
+                                                       ["Other", "s", "GENE3"]]),
+              "Son_t2t": ([], [])}
+    with patch.object(dashboard, "panel_counts", lambda cs, snap: tables[cs]):
+        risk, carrier = dashboard.person_panel_counts("Son", "snap", f)
+    check("dashboard counts a person's findings once across callsets",
+          len(risk) == 1 and sorted(r[0] for r in carrier) == ["Carrier", "Other"])
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        samples, family = root / "samples.tsv", root / "family.tsv"
+        ids = ["Dad", "Dad_vendor", "Dad_Jr", "Dad_Jr_vendor"]
+        samples.write_text("sample_id\n" + "\n".join(ids) + "\n")
+        family.write_text("id\tdisplay_name\tsex\tfather\tmother\tpartner\n"
+                          "Dad\tDad\tmale\t\t\t\nDad_Jr\tJr\tmale\tDad\t\t\n")
+        for i in ids:
+            (root / f"{i}.norm.vcf.gz").write_text("")
+        with patch.object(config, "SAMPLES_TSV", samples), \
+             patch.object(config, "FAMILY_FILE", family), \
+             patch.object(config, "NORMALIZED_DIR", root):
+            check("a relative with a prefixed id is not a parent's callset",
+                  denovo.parent_callsets("Dad") == ["Dad", "Dad_vendor"])
+
+    con = duckdb.connect()
+    con.execute("CREATE TABLE variants (snapshot_id VARCHAR, sample_id VARCHAR, chrom VARCHAR, "
+                "pos BIGINT, ref VARCHAR, alt VARCHAR, gene VARCHAR, consequence VARCHAR, "
+                "clinvar_sig VARCHAR)")
+    con.execute("INSERT INTO variants VALUES "
+                "('s','Kid','1',100,'A','G','GENE1','missense','Pathogenic'),"
+                "('s','Kid','1',100,'A','T','GENE1','synonymous','Benign'),"
+                "('s','Kid','2',201,'-','T','GENE2','frameshift','Likely_pathogenic')")
+    cands = [{"chrom": "1", "pos": 100, "ref": "A", "alt": "T"},
+             {"chrom": "2", "pos": 200, "ref": "G", "alt": "GT"}]
+    wrapped = type("C", (), {"execute": lambda self, *a: con.execute(*a),
+                             "close": lambda self: None})()
+    with patch("pipeline.load.connect", lambda: wrapped), \
+         patch("pipeline.snapshot.latest_snapshot", lambda: "s"):
+        denovo._annotate("Kid", cands)
+    con.close()
+    check("de-novo annotation matches the allele, not just the position",
+          cands[0]["clinvar"] == "Benign")
+    check("de-novo annotation finds an indel in VEP form",
+          cands[1]["gene"] == "GENE2" and cands[1]["clinvar"] == "Likely_pathogenic")
+
+    with patch("pipeline.panel._sex_of", lambda s: "male"):
+        check("ExpansionHunter is told a male's sex", repeats._sex_args("Son") == ["--sex", "male"])
+    with patch("pipeline.panel._sex_of", lambda s: ""):
+        check("an unknown sex passes no flag", repeats._sex_args("Son") == [])
+
 
 def test_pedigree_ped_generation() -> None:
     """family graph -> standard PED (parent columns + sex codes)."""
@@ -5078,6 +5267,7 @@ if __name__ == "__main__":
     test_pedigree_relationships()
     test_pedigree_callsets()
     test_inheritance_origin()
+    test_callset_and_sex_aware_evidence()
     test_pedigree_ped_generation()
     test_family_migrate_plan()
     test_family_migrate_manifests()

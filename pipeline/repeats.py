@@ -173,12 +173,28 @@ def repeats_report(sample: str, force: bool = False) -> Path:
     if force or not vcf.exists():
         log.info("Running ExpansionHunter on %s …", sample)
         run([str(eh), "--reads", str(cram), "--reference", str(config.REF_FASTA),
-             "--variant-catalog", str(catalog), "--output-prefix", str(prefix)],
+             "--variant-catalog", str(catalog), "--output-prefix", str(prefix),
+             *_sex_args(sample)],
             stdout=open(config.LOGS_DIR / f"repeats_{sample}.log", "wb"),
             stderr=subprocess.STDOUT)
     else:
         log.info("Reusing existing ExpansionHunter genotypes (%s).", vcf.name)
     return report_from_genotypes(sample, vcf)
+
+
+def _sex_args(sample: str) -> list[str]:
+    """ExpansionHunter's `--sex`. Its default is female, which sizes two alleles on a male's
+    single X at loci such as FMR1 and AR."""
+    from .panel import _sex_of
+    from .sexchrom import is_female, is_male
+    sex = _sex_of(sample)
+    if is_male(sex):
+        return ["--sex", "male"]
+    if is_female(sex):
+        return ["--sex", "female"]
+    log.warning("%s has no recorded sex — ExpansionHunter will assume female, so X-linked "
+                "repeat loci may be sized wrongly.", sample)
+    return []
 
 
 def report_from_genotypes(sample: str, vcf: Path) -> Path:

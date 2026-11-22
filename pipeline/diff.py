@@ -14,8 +14,8 @@ import json
 from pathlib import Path
 
 from . import reportpaths
-from . import (acmg, alphamissense, config, enformer, gnomad_constraint,
-               limitations, spliceai, triage)
+from . import (acmg, allele_balance, alphamissense, config, enformer, gnomad_constraint,
+               limitations, pedigree, sexchrom, spliceai, triage)
 from .load import TABLE, connect, transaction
 from .snapshot import load_manifest
 from .util import disease_name, log, review_stars, write_report
@@ -221,10 +221,57 @@ def score_pair(con, prev: str, curr: str) -> list[dict]:
     return findings
 
 
+def by_person(findings: list[dict], fam, scanned: dict[str, int]) -> list[dict]:
+    """One report row per (person, variant) from the per-callset findings.
+
+    One genome called three times is one change to review, not three. The row keeps the
+    strongest callset's verdict and says how many callsets found it. T2T calls are lifted and
+    used for concordance, so a change seen only there is capped at `monitor` and cannot raise
+    an alert. A lifted callset's chrM rows are left out (`sexchrom`). `triage_results` keeps
+    every per-callset verdict."""
+    order = {t: i for i, t in enumerate(triage.TIERS)}
+    groups: dict[tuple, list[dict]] = {}
+    for f in findings:
+        if sexchrom.is_alternate_mt(f["sample"], f["chrom"], fam):
+            continue
+        key = (fam.person_of(f["sample"]), f["chrom"], f["pos"], f["ref"], f["alt"])
+        groups.setdefault(key, []).append(f)
+    out = []
+    for (person, *_), fs in groups.items():
+        best = min(fs, key=lambda f: (order[f["tier"]], -f["score"], f["sample"]))
+        calls = {f["sample"]: f["zyg"] for f in fs}
+        total = max(scanned.get(person, 0), len(calls))
+        t2t_only = total > 1 and all(s.endswith("_t2t") for s in calls)
+        row = {**best, "sample": person, "calls": calls, "t2t_only": t2t_only,
+               "support": f"{len(calls)}/{total}" if total > 1 else ""}
+        if t2t_only and row["tier"] == "actionable_now":
+            row["tier"] = "monitor"
+        out.append(row)
+    return out
+
+
+def _zyg_cell(row: dict, ab: dict) -> str:
+    """The calls' zygosity, or the low-allele-fraction warning for the weakest het."""
+    key = (str(row["chrom"]), int(row["pos"]), row["ref"], row["alt"])
+    low = [ab[s][key] for s, z in row["calls"].items()
+           if allele_balance.is_low(z, ab.get(s, {}).get(key))]
+    if low:
+        return allele_balance.label("HET", min(low, key=lambda x: x[0] / x[1]))
+    return "/".join(sorted({z or "-" for z in row["calls"].values()}))
+
+
 def diff(prev: str, curr: str) -> tuple[Path, int, str]:
     con = connect()
     findings = score_pair(con, prev, curr)
     _persist(con, prev, curr, findings)
+    samples = [r[0] for r in con.execute(
+        f"SELECT DISTINCT sample_id FROM {TABLE} WHERE snapshot_id = ?", [curr]).fetchall()]
+    fam = pedigree.load(sequenced=set(samples))
+    scanned: dict[str, int] = {}
+    for s in samples:
+        person = fam.person_of(s)
+        scanned[person] = scanned.get(person, 0) + 1
+    findings = by_person(findings, fam, scanned)
     model_changes = con.execute("""
         SELECT p.chrom,p.pos,p.ref,p.alt,p.model_band,c.model_band,p.model_epoch,c.model_epoch
         FROM variant_history p JOIN variant_history c USING (chrom,pos,ref,alt)
@@ -245,22 +292,30 @@ def diff(prev: str, curr: str) -> tuple[Path, int, str]:
     path = reportpaths.family_report(f"delta_{prev}_to_{curr}", curr)
 
     n_act = len(by_tier["actionable_now"])
-    head = "| ! | Sample | Gene | Disease | Variant | Change | Score | Review | Zyg |"
-    sep = "|---|--------|------|---------|---------|--------|:-----:|:------:|-----|"
+    head = ("| ! | Sample | Gene | Disease | Variant | Change | Score | Review | Zyg | "
+            "Callsets |")
+    sep = "|---|--------|------|---------|---------|--------|:-----:|:------:|-----|:--------:|"
+
+    keys_by_callset: dict[str, list] = {}
+    for f in shown:
+        for s in f["calls"]:
+            keys_by_callset.setdefault(s, []).append((f["chrom"], f["pos"], f["ref"], f["alt"]))
+    ab = {s: allele_balance.fractions(s, keys) for s, keys in keys_by_callset.items()}
 
     def _row(f) -> str:
         badge = _TIER_BADGE.get(f["tier"], "·")
         var = f"{f['chrom']}:{f['pos']} {f['ref']}>{f['alt']}"
+        found = (f["support"] + (" (T2T only)" if f["t2t_only"] else "")) or "-"
         return (f"| {badge} | {f['sample']} | {f['gene'] or '?'} | "
                 f"{disease_name(f['disease'])} | {var} | {f['rationale']} | "
-                f"{f['score']:.2f} | {'★' * f['stars'] or '0★'} | {f['zyg'] or '-'} |")
+                f"{f['score']:.2f} | {'★' * f['stars'] or '0★'} | {_zyg_cell(f, ab)} | {found} |")
 
     def _section(title: str, items: list[dict], blurb: str = "") -> list[str]:
         out = [f"## {title}", ""]
         if blurb:
             out += [blurb, ""]
         out += [head, sep]
-        out += [_row(f) for f in items] or ["| | | _none_ | | | | | | |"]
+        out += [_row(f) for f in items] or ["| | | _none_ | | | | | | | |"]
         out += [""]
         return out
 

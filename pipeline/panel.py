@@ -19,7 +19,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from . import reportpaths
-from . import clinsig, config, penetrance
+from . import allele_balance, clinsig, config, pedigree, penetrance, sexchrom
 from .load import TABLE, connect
 from .snapshot import load_manifest
 from .util import (disease_name as _disease, find_row, log, read_tsv,
@@ -83,8 +83,9 @@ def _is_male(sex: str) -> bool:
     return sex in ("male", "m", "1")
 
 
-def _actionable_by_gene(con, snapshot_id: str, sample: str) -> dict[str, list[dict]]:
-    """All actionable variants for a sample, indexed by gene symbol."""
+def _actionable_by_gene(con, snapshot_id: str, sample: str, fam=None) -> dict[str, list[dict]]:
+    """All actionable variants for a sample, indexed by gene symbol, each with its allele
+    balance. With `fam`, a lifted callset's chrM rows are left out (`sexchrom`)."""
     rows = con.execute(f"""
         SELECT gene, chrom, pos, ref, alt, clinvar_sig, clinvar_revstat,
                clinvar_disease, zygosity
@@ -92,12 +93,16 @@ def _actionable_by_gene(con, snapshot_id: str, sample: str) -> dict[str, list[di
         WHERE snapshot_id = ? AND sample_id = ? AND gene IS NOT NULL
           AND {clinsig.sql_actionable()}
     """, [snapshot_id, sample]).fetchall()
+    if fam is not None:
+        rows = [r for r in rows if not sexchrom.is_alternate_mt(sample, r[1], fam)]
+    ab = allele_balance.fractions(sample, [r[1:5] for r in rows])
     by_gene: dict[str, list[dict]] = {}
     for gene, chrom, pos, ref, alt, sig, rev, dis, zyg in rows:
         by_gene.setdefault(gene, []).append({
             "gene": gene, "key": (chrom, pos, ref, alt), "sig": sig, "rev": rev,
             "disease": dis, "zyg": (zyg or "").upper(),
             "label": f"{chrom}:{pos} {ref}>{alt}",
+            "ab": ab.get((str(chrom), int(pos), ref, alt)),
         })
     return by_gene
 
@@ -159,9 +164,16 @@ _HEADER_PRIMARY = "| Disease | Status | Gene | Variant(s) | ClinVar | Review | P
 _SEP_PRIMARY = "|---------|--------|------|------------|---------|:------:|------------|"
 
 
+def _zyg_cell(v: dict) -> str:
+    """'Het', or the shared low-allele-fraction warning FULL and ACMG show for this call."""
+    ab = v.get("ab")
+    return allele_balance.label(v["zyg"], ab) if allele_balance.is_low(v["zyg"], ab) \
+        else v["zyg"].title()
+
+
 def _row_md(dz: _Disease, status: str, variants: list[dict], primary: bool = False) -> str:
     best = max(_stars(v["rev"]) for v in variants)
-    vis = "; ".join(sorted(f"{v['gene']} {v['label']} ({v['zyg'].title()})"
+    vis = "; ".join(sorted(f"{v['gene']} {v['label']} ({_zyg_cell(v)})"
                            for v in variants))
     # One cell per distinct classification, joined with a comma: `/` already means
     # something inside a ClinVar value, and `|` would split the table row.
@@ -187,16 +199,18 @@ def panel_report(snapshot_id: str) -> list[Path]:
         [snapshot_id]).fetchall()]
 
     n_genes = len({g for d in panel for g in d.genes})
-    # ar_carriers[gene][sample] = that sample's AR status in gene — drives the family
-    # reproductive-risk check. Every non-None AR status carries a pathogenic allele
+    # ar_carriers[gene][person] = that person's AR status in gene — drives the family
+    # reproductive-risk check. Keyed by PERSON: `Adam` and `Adam_vendor` are one genome, not a
+    # couple. Every non-None AR status carries a pathogenic allele
     # (carrier: 1 allele; affected/compound: 2), so all three feed the index — a
     # hom/compound member paired with a carrier is a *higher* risk than carrier×carrier
     # and must not be dropped.
     ar_carriers: dict[str, dict[str, str]] = {}
+    fam = pedigree.load(sequenced=set(samples))
 
     for sample in samples:
         sex = _sex_of(sample)
-        by_gene = _actionable_by_gene(con, snapshot_id, sample)
+        by_gene = _actionable_by_gene(con, snapshot_id, sample, fam)
         primary, carriers = [], []
         for dz in panel:
             hits = [v for g in dz.genes for v in by_gene.get(g, [])]
@@ -208,7 +222,7 @@ def panel_report(snapshot_id: str) -> list[Path]:
             (carriers if status == _CARRIER else primary).append((dz, status, hits))
             if dz.inh == "AR":
                 for g, gene_status in per_gene.items():
-                    index_ar_status(ar_carriers, g, sample, gene_status)
+                    index_ar_status(ar_carriers, g, fam.person_of(sample), gene_status)
 
         primary.sort(key=lambda t: (_RANK[t[1]], t[0].name))
         carriers.sort(key=lambda t: t[0].name)

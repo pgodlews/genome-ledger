@@ -66,6 +66,24 @@ def panel_counts(callset: str, snap: str) -> tuple[list[list[str]], list[list[st
     return _rows_under(md, "Disease risk"), _rows_under(md, "Carrier status")
 
 
+def person_panel_counts(person: str, snap: str, fam) -> tuple[list[list[str]], list[list[str]]]:
+    """Panel rows across all of a person's callsets, one per (disease, gene).
+
+    The page speaks for the person, so a finding in an alternate callset must not read as
+    "none". A disease that is a risk in one callset and carrier status in another counts once,
+    as the risk."""
+    risk: dict[tuple, list[str]] = {}
+    carrier: dict[tuple, list[str]] = {}
+    key = lambda row: (row[0], row[2] if len(row) > 2 else "")
+    for cs in fam.callsets(person) or [person]:
+        r, c = panel_counts(cs, snap)
+        for row in r:
+            risk.setdefault(key(row), row)
+        for row in c:
+            carrier.setdefault(key(row), row)
+    return list(risk.values()), [row for k, row in carrier.items() if k not in risk]
+
+
 def prs_percentiles(callset: str) -> list[tuple[str, float]]:
     """[(trait, percentile)] from a callset's PRS report, highest first."""
     out = []
@@ -117,6 +135,8 @@ def findings(person: str, snap: str, fam) -> list[dict] | None:
         pos = int(re.match(r"\d+", rest).group(0)) if re.match(r"\d+", rest) else 0
         out.append({**v, "zyg": c["zyg"], "chrom": chrom, "pos": pos,
                     "origin": inheritance.ORIGIN_LABEL[inheritance.origin(v, person, fam)],
+                    "support": inheritance.callset_support(c, person, fam),
+                    "copies": inheritance.copy_state(v, person, fam),
                     "low_ab": c.get("low_ab")})
     return sorted(out, key=lambda f: (f["zyg"] != "HOM", f["gene"]))
 
@@ -140,13 +160,19 @@ def genome_map(found: list[dict]) -> str:
     by_chrom: dict[str, list[dict]] = {}
     for f in found:
         by_chrom.setdefault(f["chrom"], []).append(f)
+    from .render import _attr
     bars = []
     for chrom, mb in CHROM_MB.items():
         pins = ""
         for f in by_chrom.get(chrom, []):
             left = max(0.0, min(100.0, f["pos"] / (mb * 1e6) * 100))
-            cls = " hom" if f["zyg"] == "HOM" else ""
-            pins += (f'<span class="lab{cls}" style="left:{left:.1f}%">{_e(f["gene"])}</span>'
+            cls = " hom" if f["copies"]["n"] == "2" else ""
+            tip = " · ".join(x for x in (
+                f'{f["copies"]["text"]}',
+                f'found in {f["support"]} callsets' if f["support"] else "",
+                "low allele fraction" if f["low_ab"] else "") if x)
+            pins += (f'<span class="lab{cls}" title="{_attr(tip)}" '
+                     f'style="left:{left:.1f}%">{_e(f["gene"])}</span>'
                      f'<span class="pin{cls}" style="left:{left:.1f}%"></span>')
         bars.append(f'<div class="chr" style="flex-grow:{mb}" title="chr {chrom}">{pins}</div>')
     return ('<section class="card" aria-label="Genome map">'
@@ -163,11 +189,12 @@ def _tile(label: str, value, sub: str, cls: str = "") -> str:
             f'<p class="big {cls}">{value}</p><p class="v">{_e(sub)}</p></div>')
 
 
-def stat_tiles(callset: str, snap: str | None) -> str:
+def stat_tiles(person: str, callset: str, snap: str | None, fam) -> str:
     tiles = []
     if snap:
-        risk, carrier = panel_counts(callset, snap)
-        if rp.snapshot_report("panel", callset, snap).exists():
+        risk, carrier = person_panel_counts(person, snap, fam)
+        if any(rp.snapshot_report("panel", cs, snap).exists()
+               for cs in fam.callsets(person) or [person]):
             genes = lambda rows: " · ".join(dict.fromkeys(r[2] for r in rows if len(r) > 2))
             tiles.append(_tile("Disease-risk findings", len(risk), genes(risk) or "none",
                                "c-hom" if risk else "c-mut"))
@@ -175,7 +202,8 @@ def stat_tiles(callset: str, snap: str | None) -> str:
                                "c-het" if carrier else "c-mut"))
         d = delta_summary(snap)
         if d:
-            mine = [r for r in d["rows"] if r[1] == callset]
+            # One per variant: older DELTA reports list each callset as its own row.
+            mine = {r[4] for r in d["rows"] if fam.person_of(r[1]) == person}
             tiles.append(_tile(f"Changed since {d['prev'][:10]}", len(mine),
                                "see What changed" if mine else "nothing for this person",
                                "c-acc" if mine else "c-mut"))
@@ -195,15 +223,21 @@ def findings_card(found: list[dict] | None, has_tree: bool) -> str:
         return ""
     items = []
     for f in found:
-        hom = f["zyg"] == "HOM"
         sig = f["sig"].replace("_", " ")
         low = " Low allele fraction — review before acting on it." if f["low_ab"] else ""
+        state = f["copies"]
+        two = state["n"] == "2"
+        split = state["text"] if state["n"] == "1–2" else ""
+        found_in = (f' Found in {_e(f["support"])} callsets'
+                    + (f": {_e(split)}." if split else ".")) if f["support"] else ""
+        badge = state["n"] if state["n"] == "mt" else f'{state["n"]}×'
         items.append(
-            f'<div class="finding"><div class="z{" hom" if hom else ""}">'
-            f'{"2×" if hom else "1×"}</div><div>'
+            f'<div class="finding"><div class="z{" hom" if two else ""}">'
+            f'{_e(badge)}</div><div>'
             f'<p class="n">{_e(disease_name(f["disease"]) or f["gene"])}</p>'
             f'<p class="m">{_e(f["gene"])} · {_e(f["label"])} · {_e(sig)}</p>'
-            f'<p class="s">{"Two copies" if hom else "One copy"}, {_e(f["origin"])}.{low}</p>'
+            f'<p class="s">{_e(state["label"])}, {_e(f["origin"])}.'
+            f'{found_in}{low}</p>'
             '</div></div>')
     link = ('<a href="inheritance.html" target="_top" style="font-size:.85rem">'
             'Trace through the family</a>') if has_tree else ""
@@ -279,7 +313,7 @@ def overview(person: str, callset: str, snap: str | None, fam, out_dir: Path) ->
     return "".join((
         genome_map(found or []),
         '<div style="height:1rem"></div>' if found else "",
-        stat_tiles(callset, snap),
+        stat_tiles(person, callset, snap, fam),
         f'<div class="grid g{max(1, n_cols)}">{two}</div>' if two else "",
         genome_cards(callset, out_dir),
     ))
@@ -298,7 +332,7 @@ def people_cards(fam, snap: str | None, base: str) -> str:
             continue
         badges = genes = ""
         if snap:
-            risk, carrier = panel_counts(pid, snap)
+            risk, carrier = person_panel_counts(pid, snap, fam)
             if risk:
                 badges += f'<span class="badge hom">{len(risk)} disease-risk</span> '
             if carrier:

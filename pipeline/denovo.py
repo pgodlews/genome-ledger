@@ -189,10 +189,21 @@ def parent_callsets(parent: str) -> list[str]:
     genome, and each callset's *false negatives* are largely caller-specific. Excluding
     against all of them removes exactly the candidates a single caller happened to miss —
     which is the dominant false-positive source in a cross-caller trio."""
+    from . import pedigree
     from .util import read_tsv
     ids = [r["sample_id"] for r in read_tsv(config.SAMPLES_TSV)]
-    return [i for i in ids
-            if (i == parent or i.startswith(f"{parent}_")) and normalized_path(i).exists()]
+    fam = pedigree.load(sequenced=set(ids))
+
+    def belongs(i: str) -> bool:
+        # A prefix alone would make a real relative (`Dad_Jr`) one of Dad's callsets. An id
+        # the family file does not know keeps the plain suffix convention.
+        if i == parent:
+            return True
+        if not i.startswith(f"{parent}_") or i in fam.people:
+            return False
+        return fam.person_of(i) in (parent, i)
+
+    return [i for i in ids if belongs(i) and normalized_path(i).exists()]
 
 
 def _carrier_view(sample: str, wd: Path, force: bool = False) -> Path:
@@ -520,19 +531,24 @@ def _annotate(child: str, cands: list[dict]) -> None:
         snap = latest_snapshot()
         if not snap:
             return
+        from .allele_balance import vep_key
         from .panel import sql_in_list
         con = connect()
+        # The table holds VEP's allele form, so an indel sits one base right of its VCF
+        # record. Match the whole allele: at a split multiallelic site, a position-only join
+        # can hand one allele the ClinVar label of another.
+        keys = [vep_key(c["chrom"], c["pos"], c["ref"], c["alt"]) for c in cands]
         # Filter by position IN SQL. Without it this grouped every row the child has in the
         # snapshot (millions) and threw all but the candidate positions away in Python — ~1.8 GB
         # of peak RSS to retrieve a few thousand annotations. Positions are ints parsed from
         # our own VCF, so inlining them is safe; chroms go through the shared quoting helper.
-        chroms = sql_in_list({c["chrom"] for c in cands})
-        positions = ", ".join(str(p) for p in sorted({c["pos"] for c in cands}))
+        chroms = sql_in_list({k[0] for k in keys})
+        positions = ", ".join(str(p) for p in sorted({k[1] for k in keys}))
         rows = con.execute(
-            f"SELECT chrom, pos, any_value(gene), any_value(consequence), "
+            f"SELECT chrom, pos, ref, alt, any_value(gene), any_value(consequence), "
             f"any_value(clinvar_sig) FROM {TABLE} WHERE snapshot_id = ? AND sample_id = ? "
             f"AND chrom IN ({chroms}) AND pos IN ({positions}) "
-            f"GROUP BY chrom, pos", [snap, child]).fetchall()
+            f"GROUP BY chrom, pos, ref, alt", [snap, child]).fetchall()
         loaded = con.execute(
             f"SELECT count(*) FROM {TABLE} WHERE snapshot_id = ? AND sample_id = ?",
             [snap, child]).fetchone()[0]
@@ -546,9 +562,9 @@ def _annotate(child: str, cands: list[dict]) -> None:
                         "and `load %s %s` to annotate the report.",
                         child, snap, child, snap, child, snap)
             return
-        ann = {(r[0], r[1]): r[2:] for r in rows}
-        for c in cands:
-            gene, csq, sig = ann.get((c["chrom"], c["pos"]), (None, None, None))
+        ann = {(r[0], int(r[1]), r[2], r[3]): r[4:] for r in rows}
+        for c, key in zip(cands, keys):
+            gene, csq, sig = ann.get(key, (None, None, None))
             c["gene"], c["csq"], c["clinvar"] = gene, csq, sig
     except Exception as e:  # noqa: BLE001 — annotation is a nicety, never the point
         log.warning("de-novo: gene annotation unavailable (%s) — reporting positions only.", e)

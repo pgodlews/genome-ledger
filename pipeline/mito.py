@@ -118,6 +118,7 @@ def mito_report(sample: str, force: bool = False) -> Path:
     homo = [c for c in passing if c["type"] == "homoplasmic"]
     low = [c for c in passing if c["af"] < config.MITO_MIN_HET_AF]
     pathogenic = [c for c in passing if c["known"]]
+    low_pathogenic = sum(1 for c in pathogenic if c["af"] < config.MITO_MIN_HET_AF)
     filtered_out = len(calls) - len(passing)
 
     def _row(c: dict) -> str:
@@ -134,7 +135,9 @@ def mito_report(sample: str, force: bool = False) -> Path:
         f"+ FilterMutectCalls (contig `{config.MT_CONTIG}`, rCRS)",
         f"- **PASS variants:** {len(passing)} — {len(homo)} homoplasmic, "
         f"{len(het)} heteroplasmic (≥{int(config.MITO_MIN_HET_AF * 100)}%)",
-        f"- **Known pathogenic mtDNA variants detected:** {len(pathogenic)}",
+        f"- **Known pathogenic mtDNA variants detected:** {len(pathogenic)}"
+        + (f" ({low_pathogenic} below {int(config.MITO_MIN_HET_AF * 100)}%, which can be an "
+           "artefact — review)" if low_pathogenic else ""),
         "",
     ]
 
@@ -179,7 +182,8 @@ def mito_report(sample: str, force: bool = False) -> Path:
         "sequenced sample (blood); other tissues (muscle, brain) can differ substantially, "
         "and blood levels of some pathogenic variants decline with age.",
         f"- **Low-level calls (<{int(config.MITO_MIN_HET_AF * 100)}%)** are excluded from the "
-        f"headline counts ({len(low)} such PASS call(s)); at high mtDNA depth very low "
+        f"homoplasmic and heteroplasmic counts ({len(low)} such PASS call(s)), but a known "
+        "pathogenic variant is always listed; at high mtDNA depth very low "
         "fractions are easily artefacts (NUMT misalignment, sequencing error).",
         f"- **{filtered_out} call(s)** did not PASS FilterMutectCalls and are omitted.",
         "- **NUMTs** (nuclear-mitochondrial segments) can masquerade as low-level heteroplasmy; "

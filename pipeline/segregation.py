@@ -184,17 +184,32 @@ def _vcf_alleles(child: str, variants: list[dict]) -> int:
 
 
 # --- read-level confirmation of the absences a verdict rests on --------------
-def _confirm_absences(child: str, parents: list[str], variants: list[dict],
-                      carried: dict[str, set], force: bool = False) -> dict:
-    """For each (parent, variant) the VCFs call *absent*, ask the parent's reads.
+def parent_status(in_vcf: bool, read: tuple[str, str] | None) -> tuple[str, str]:
+    """(status, detail) for one parent at one variant, from their VCFs and their reads.
 
-    Only the absences matter: a parent recorded as carrying a variant needs no confirmation,
-    but "does not carry" from a variant-only VCF is precisely the claim that is unsafe, and
-    every cis/trans verdict is built out of those claims."""
+    A call in any one callset is not enough on its own: a spurious lifted record in a parent
+    flips the cis/trans verdict. When a VCF says "carries" and the reads show evidenced
+    hom-ref, the two disagree, so the site is 'unknown' and the verdict stays unresolved."""
+    if read is None:
+        return ("carries", "in their VCF") if in_vcf else (
+            "unknown", "not confirmed against reads")
+    status, detail = read
+    if not in_vcf:
+        return status, detail
+    if status == "absent":
+        return "unknown", f"VCF call not supported by reads ({detail})"
+    return "carries", "in their VCF" if status == "unknown" else f"in their VCF; {detail}"
+
+
+def _read_evidence(child: str, parents: list[str], variants: list[dict],
+                   carried: dict[str, set], force: bool = False) -> dict:
+    """Ask each parent's reads about every candidate variant.
+
+    "Does not carry" from a variant-only VCF is unsafe, and so is "carries" when it rests on
+    one callset, and every cis/trans verdict is built out of those claims."""
     wd = _work_dir(child)
     wd.mkdir(parents=True, exist_ok=True)
-    need = [v for v in variants
-            if any(v["key"] not in carried[p] for p in parents) and v.get("vcf_pos")]
+    need = [v for v in variants if v.get("vcf_pos")]
     unresolved = [v for v in variants
                   if any(v["key"] not in carried[p] for p in parents) and not v.get("vcf_pos")]
     if unresolved:
@@ -307,11 +322,13 @@ def _report(child: str, parents: list[str], genes: dict, snap: str) -> Path:
         "for variants a read or read-pair spans (~1 kb); transmission resolves them at any "
         "distance, and needs no reads from the child. Where both stages have an opinion they "
         "should agree — a disagreement is worth investigating, not averaging.",
-        "- **Absence is confirmed against reads, not assumed.** Both parents' VCFs are "
-        "variant-only, so a missing record is either hom-ref or never called. Every absence a "
-        "verdict depends on is re-checked against the parent's CRAM (GATK force-call plus a "
-        "caller-independent raw pileup, as in `denovo`). Without a parental CRAM, or where the "
-        "reads cannot resolve the site, the verdict is **unresolved** rather than guessed.",
+        "- **Parental calls are checked against reads, not assumed.** Both parents' VCFs are "
+        "variant-only, so a missing record is either hom-ref or never called, and a record in "
+        "one lifted callset can be spurious. Each candidate is re-checked against the parent's "
+        "CRAM (GATK force-call plus a caller-independent raw pileup, as in `denovo`). Without "
+        "a parental CRAM, a VCF call stands and an absence stays unknown. Where the reads "
+        "cannot resolve an absence, or contradict a VCF call, the verdict is **unresolved** "
+        "rather than guessed.",
         "- **`in-trans` is the reviewable outcome:** both copies of a recessive-disease gene "
         "carry a damaging variant. **`in-cis`** means both sit on one copy, leaving the other "
         "intact — usually reassuring.",
@@ -372,16 +389,12 @@ def segregation_report(child: str, force: bool = False) -> Path:
     log.info("segregation: %d damaging het(s) across %d gene(s) (%d matched back to VCF "
              "records); confirming absences off the parents' reads.",
              len(variants), len({v["gene"] for v in variants}), resolved)
-    confirmed = _confirm_absences(child, parents, variants, carried, force)
+    reads = _read_evidence(child, parents, variants, carried, force)
 
     for v in variants:
-        statuses = {}
-        for parent in parents:
-            if v["key"] in carried[parent]:
-                statuses[parent] = ("carries", "in their VCF")
-                continue
-            statuses[parent] = confirmed.get((parent, v["key"]),
-                                             ("unknown", "not confirmed against reads"))
+        statuses = {parent: parent_status(v["key"] in carried[parent],
+                                          reads.get((parent, v["key"])))
+                    for parent in parents}
         v["dad_detail"] = f"{statuses[father][0]} ({statuses[father][1]})"
         v["mum_detail"] = f"{statuses[mother][0]} ({statuses[mother][1]})"
         v["transmission"] = transmission(statuses[father][0], statuses[mother][0])

@@ -5,7 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from . import reportpaths
-from . import allele_balance, alphamissense, clinsig, config, limitations, spliceai
+from . import (allele_balance, alphamissense, clinsig, config, limitations, pedigree,
+               sexchrom, spliceai)
 from .load import TABLE, connect
 from .snapshot import load_manifest
 from .util import disease_name as _disease, log, review_stars as _stars, write_report
@@ -57,7 +58,9 @@ def _full_report(con, snapshot_id: str) -> list[Path]:
         # significance first, then strongest review evidence, then gene.
         return (clinsig.rank(r[6]), -_stars(r[7]), r[0] or "zzz")
 
-    for sample in _samples_for(snapshot_id, con):
+    samples = _samples_for(snapshot_id, con)
+    fam = pedigree.load(sequenced=set(samples))
+    for sample in samples:
         rows = con.execute(f"""
             SELECT gene, clinvar_disease, chrom, pos, ref, alt, clinvar_sig,
                    clinvar_revstat, gnomad_af, zygosity
@@ -65,6 +68,7 @@ def _full_report(con, snapshot_id: str) -> list[Path]:
             WHERE snapshot_id = ? AND sample_id = ?
               AND {clinsig.sql_actionable()}
         """, [snapshot_id, sample]).fetchall()
+        rows = [r for r in rows if not sexchrom.is_alternate_mt(sample, r[2], fam)]
 
         reviewed = sorted((r for r in rows if _stars(r[7]) >= 1), key=sortkey)
         unreviewed = sorted((r for r in rows if _stars(r[7]) == 0), key=sortkey)

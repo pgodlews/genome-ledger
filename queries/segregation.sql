@@ -3,9 +3,9 @@
 -- Params: ${snapshot}
 SELECT gene, chrom, pos, ref, alt, clinvar_sig,
        string_agg(sample_id || '(' || zygosity || ')', ', ' ORDER BY sample_id) AS carriers,
-       count(*) AS n_carriers
+       count(*) AS n_callsets
 FROM variants
 WHERE snapshot_id = '${snapshot}'
   AND clinvar_sig IN ('Pathogenic','Likely_pathogenic','Pathogenic/Likely_pathogenic')
 GROUP BY gene, chrom, pos, ref, alt, clinvar_sig
-ORDER BY n_carriers DESC, gene;
+ORDER BY n_callsets DESC, gene;
