@@ -20,7 +20,11 @@ from .util import disease_name, log
 # GRCh38 chromosome lengths in Mb — the widths of the genome map.
 CHROM_MB = {"1": 248, "2": 242, "3": 198, "4": 190, "5": 182, "6": 171, "7": 159, "8": 145,
             "9": 138, "10": 134, "11": 135, "12": 133, "13": 114, "14": 107, "15": 102,
-            "16": 90, "17": 83, "18": 80, "19": 59, "20": 64, "21": 47, "22": 51, "X": 156}
+            "16": 90, "17": 83, "18": 80, "19": 59, "20": 64, "21": 47, "22": 51, "X": 156,
+            "Y": 57}
+# The mitochondrial genome in bases. At true scale beside the chromosomes it would be invisible,
+# so the map draws it as a fixed-size marker.
+MT_BP = 16_569
 
 
 # --- reading the reports ---------------------------------------------------------
@@ -161,11 +165,11 @@ def genome_map(found: list[dict]) -> str:
     for f in found:
         by_chrom.setdefault(f["chrom"], []).append(f)
     from .render import _attr
-    bars = []
-    for chrom, mb in CHROM_MB.items():
+
+    def pins_on(chrom: str, length: float) -> str:
         pins = ""
         for f in by_chrom.get(chrom, []):
-            left = max(0.0, min(100.0, f["pos"] / (mb * 1e6) * 100))
+            left = max(0.0, min(100.0, f["pos"] / length * 100))
             cls = " hom" if f["copies"]["n"] == "2" else ""
             tip = " · ".join(x for x in (
                 f'{f["copies"]["text"]}',
@@ -174,14 +178,19 @@ def genome_map(found: list[dict]) -> str:
             pins += (f'<span class="lab{cls}" title="{_attr(tip)}" '
                      f'style="left:{left:.1f}%">{_e(f["gene"])}</span>'
                      f'<span class="pin{cls}" style="left:{left:.1f}%"></span>')
-        bars.append(f'<div class="chr" style="flex-grow:{mb}" title="chr {chrom}">{pins}</div>')
+        return pins
+
+    bars = [f'<div class="chr" style="flex-grow:{mb}" title="chr {chrom}">'
+            f'{pins_on(chrom, mb * 1e6)}</div>' for chrom, mb in CHROM_MB.items()]
+    bars.append('<div class="chr" style="flex:0 0 14px" title="mitochondrial">'
+                f'{pins_on("MT", MT_BP)}</div>')
     return ('<section class="card" aria-label="Genome map">'
             '<div style="display:flex;align-items:baseline;justify-content:space-between">'
             '<h2>Where the findings sit</h2><div class="legend2">'
             '<span class="hom">two copies</span><span>one copy</span></div></div>'
             f'<div class="gmap">{"".join(bars)}</div>'
             '<div class="gaxis"><span>chr 1</span><span>chr 6</span><span>chr 12</span>'
-            '<span>chr 22 · X</span></div></section>')
+            '<span>chr 22 · X · Y · MT</span></div></section>')
 
 
 def _tile(label: str, value, sub: str, cls: str = "") -> str:

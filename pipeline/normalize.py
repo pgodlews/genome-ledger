@@ -7,14 +7,63 @@ database changes rather than representational drift.
 
 from __future__ import annotations
 
+import re
+import subprocess
+from collections import Counter
+
 from . import config
-from .util import find_row, log, require_tools, run
+from .util import _fai_contigs, find_row, log, require_tools, run
 
 PASS_ONLY = True  # keep only FILTER=PASS records
 
 
 def normalized_path(sample: str):
     return config.NORMALIZED_DIR / f"{sample}.norm.vcf.gz"
+
+
+def _reference_targets(sample: str, raw: str) -> list[str]:
+    """`bcftools view` arguments that drop records on contigs the reference does not have.
+
+    `bcftools norm -f` aborts on the first such record, so one call on an alt or decoy contig
+    (`chr1_KI270706v1_random`, which CONTIG_RENAME rightly leaves alone) used to stop the whole
+    sample. Empty unless a record really is on a foreign contig, so an input that normalized
+    before gets exactly the same command, and the same output, as it always did. Every drop
+    is counted in the log. A file where most records would go is refused instead: that is a
+    naming mismatch (RefSeq accessions, say), not a few alt contigs.
+    """
+    reference = _fai_contigs()
+    if not reference:
+        return []
+    header = subprocess.run(["bcftools", "view", "-h", raw], capture_output=True, text=True,
+                            check=True).stdout
+    declared = re.findall(r"^##contig=<ID=([^,>]+)", header, flags=re.M)
+    if all(config.CONTIG_RENAME.get(c, c) in reference for c in declared):
+        return []
+
+    query = ["bcftools", "query", "-f", "%CHROM\n", raw]
+    if PASS_ONLY:
+        query[2:2] = ["-i", 'FILTER="PASS" || FILTER="."']
+    counts: Counter[str] = Counter()
+    with subprocess.Popen(query, stdout=subprocess.PIPE, text=True) as proc:
+        for line in proc.stdout:
+            counts[line.rstrip("\n")] += 1
+    if proc.returncode:
+        raise SystemExit(f"bcftools query failed for {sample}")
+
+    keep = {c: n for c, n in counts.items() if config.CONTIG_RENAME.get(c, c) in reference}
+    drop = {c: n for c, n in counts.items() if c not in keep}
+    if not drop:
+        return []
+    n_keep, n_drop = sum(keep.values()), sum(drop.values())
+    if n_drop >= n_keep:
+        raise SystemExit(
+            f"{sample}: {n_drop:,} of {n_keep + n_drop:,} records are on contigs absent from "
+            f"{config.REF_FASTA.name} (e.g. {', '.join(sorted(drop)[:3])}). This looks like a "
+            "contig naming or build mismatch, so nothing was normalized.")
+    log.warning("%s: dropping %d record(s) on %d contig(s) absent from %s (kept %d): %s",
+                sample, n_drop, len(drop), config.REF_FASTA.name, n_keep,
+                ", ".join(f"{c}={n}" for c, n in sorted(drop.items())[:10]))
+    return ["-t", ",".join(keep)]
 
 
 def normalize(sample: str, force: bool = False) -> None:
@@ -48,7 +97,7 @@ def normalize(sample: str, force: bool = False) -> None:
         # throughout — against a bare "-f PASS" that silently normalizes to an EMPTY file,
         # and the emptiness only surfaces much later as a sample with no variants.
         view += ["-f", "PASS,."]
-    view += [raw, "-Ou"]
+    view += [*_reference_targets(sample, raw), raw, "-Ou"]
     # -x ID alongside the contig rename: the DuckDB loader parses VEP's Uploaded_variation
     # as "chrom_pos_ref/alt", but VEP emits the *supplied* identifier there whenever the
     # input VCF's ID column is populated ("rs334"), and load.py's `WHERE pos IS NOT NULL`
@@ -60,7 +109,6 @@ def normalize(sample: str, force: bool = False) -> None:
     norm = ["bcftools", "norm", "-f", str(config.REF_FASTA), "-m", "-both",
             "-Oz", "-o", str(out)]
 
-    import subprocess
     try:
         p1 = subprocess.Popen([str(c) for c in view], stdout=subprocess.PIPE)
         p2 = subprocess.Popen([str(c) for c in rename], stdin=p1.stdout,

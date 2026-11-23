@@ -16,7 +16,7 @@ from pathlib import Path
 from . import reportpaths
 from . import config
 from .call import _java_env
-from .util import find_row, log, require_tools, run, write_report
+from .util import PASS_ONLY, find_row, log, require_tools, run, write_report
 
 
 def _called_vcf(sample: str) -> Path:
@@ -33,7 +33,8 @@ def _sex(sample: str) -> str:
 
 
 def _subset(vcf: Path, contig: str, dest: Path) -> Path:
-    run(["bcftools", "view", str(vcf), contig, "-Oz", "-o", str(dest)])
+    # A self-called VCF still holds the hard-filtered records. See util.PASS_ONLY.
+    run(["bcftools", "view", *PASS_ONLY, str(vcf), contig, "-Oz", "-o", str(dest)])
     run(["tabix", "-f", "-p", "vcf", str(dest)])
     return dest
 

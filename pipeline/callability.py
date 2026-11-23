@@ -56,6 +56,16 @@ def _global_callable_frac(dist: Path, min_depth: int) -> float | None:
     return None
 
 
+def _has_threshold(thresholds_gz: Path, min_depth: int) -> bool:
+    """Whether a cached mosdepth run counted bases at this depth. One made before
+    CALLABLE_MIN_DEPTH changed has no such column and has to be run again."""
+    try:
+        with gzip.open(thresholds_gz, "rt") as fh:
+            return f"{min_depth}X" in fh.readline().rstrip("\n").split("\t")
+    except (OSError, EOFError):
+        return False
+
+
 def _gene_callability(thresholds_gz: Path, regions_gz: Path, min_depth: int) -> list[dict]:
     """Per-gene callable fraction (bases >= min_depth / gene length) + mean depth."""
     means: dict[str, float] = {}
@@ -70,12 +80,13 @@ def _gene_callability(thresholds_gz: Path, regions_gz: Path, min_depth: int) -> 
         try:
             ci = header.index(f"{min_depth}X")    # e.g. "10X" column
         except ValueError:
-            ci = None
+            # Never read a missing column as zero: that reports every gene as 0% callable.
+            raise SystemExit(f"{thresholds_gz} has no {min_depth}X column.") from None
         for line in fh:
             f = line.rstrip("\n").split("\t")
             chrom, start, end, region = f[0], int(f[1]), int(f[2]), f[3]
             length = end - start
-            ge = int(f[ci]) if ci is not None and ci < len(f) else 0
+            ge = int(f[ci])
             rows.append({
                 "gene": region, "chrom": chrom,
                 "mean": means.get(region),
@@ -108,7 +119,8 @@ def callability_report(sample: str, force: bool = False) -> Path:
     md = config.CALLABLE_MIN_DEPTH
 
     summary = Path(f"{prefix}.mosdepth.summary.txt")
-    if force or not summary.exists():
+    if force or not summary.exists() or not _has_threshold(
+            Path(f"{prefix}.thresholds.bed.gz"), md):
         log.info("Running mosdepth on %s …", sample)
         with open(config.LOGS_DIR / f"callable_{sample}.log", "wb") as run_log:
             subprocess.run(

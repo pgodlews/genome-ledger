@@ -48,9 +48,8 @@ def _info(field: str, info: str) -> str:
 def _genotype(fmt: str, sample: str) -> str:
     """The GT cell, phase-normalized to '/' separators.
 
-    Manta emits unphased genotypes, so this is defensive — but the carried-check below
-    compares against literal "0/0" and "./.", which a phased "0|0" would slip past and be
-    counted as a carried SV."""
+    Manta emits unphased genotypes, so this is defensive: it keeps the carried-check below
+    to one separator."""
     keys, vals = fmt.split(":"), sample.split(":")
     try:
         return vals[keys.index("GT")].replace("|", "/")
@@ -74,7 +73,7 @@ def _parse_sv_vcf(vcf_gz: Path) -> tuple[list[dict], int]:
                 continue
             svtype = _info("SVTYPE", info)
             gt = _genotype(fmt, sample)
-            if gt in ("0/0", "./.", "."):   # not carried / no genotype
+            if all(a in ("0", ".") for a in gt.split("/")):   # no alt allele called
                 continue
             if svtype == "BND":
                 bnd += 1

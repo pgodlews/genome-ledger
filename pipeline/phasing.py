@@ -26,6 +26,7 @@ from pathlib import Path
 
 from . import reportpaths
 from . import config
+from .allele_balance import vep_key
 from .call import aligned_cram
 from .load import TABLE, connect
 from .normalize import normalized_path
@@ -124,39 +125,25 @@ def _run_whatshap(sample: str, candidates: list[dict], out_dir: Path,
     return phased
 
 
-def _parse_phased(phased: Path) -> dict[tuple[str, str], dict]:
-    """(chrom,pos) → {ps, alt_hap} for heterozygous variants; alt_hap is the haplotype side
-    carrying ALT (0 for '1|0', 1 for '0|1'); both None when the variant wasn't phased.
+def _parse_phased(phased: Path) -> dict[tuple, dict]:
+    """(chrom, pos, ref, alt) in VEP form → {ps, alt_hap} for heterozygous variants; alt_hap
+    is the haplotype side carrying ALT (0 for '1|0', 1 for '0|1'); both None when the variant
+    wasn't phased. `_verdict` looks these up with DuckDB's rows, which hold that same form.
 
-    Keyed by position alone, because `_verdict` looks these up with DuckDB's VEP-style
-    coordinates and the two sides disagree on indel alleles (hence the +1 anchor entry at
-    the bottom). That makes the key ambiguous for a split multiallelic — `bcftools norm
-    -m -both` turns one 1/2 genotype into two het records at the same POS — and plain
-    last-wins assignment then handed both records whichever haplotype came second. A
-    genuine compound het with the two alleles on opposite copies was reported as "in-cis,
-    other copy intact": the precise inversion of the call this module exists to make.
+    The key has to be the whole allele. Keyed by position, with an indel aliased one base to
+    the right, one entry answered for two different variants in two ways, and both read as
+    "in-cis, other copy intact" — the precise inversion of the call this module exists to
+    make: the two alleles of a split 1/2 genotype, and an indel beside a SNV at its VEP
+    coordinate (AT>A at p and T>C at p+1 both sit at p+1 in DuckDB).
 
-    Conflicting records at one position are therefore marked ambiguous and read as unphased
-    downstream. Refusing to phase a position the key cannot disambiguate is the honest
-    answer, and it fails toward "unknown" rather than toward false reassurance.
+    Different alleles at one VCF POS are marked ambiguous and read as unphased downstream.
+    `bcftools norm -m -both` writes a 1/2 genotype as two records at one POS, and WhatsHap
+    phases only the first and leaves the other `0/1`, so the output cannot place both. That
+    fails toward "unknown" rather than toward false reassurance.
+
+    A (chrom, pos) entry holds the same state for the record(s) at that VCF POS.
     """
-    out: dict[tuple[str, str], dict] = {}
-
-    def place(key, rec: dict, src: tuple, anchor: bool = False) -> None:
-        prior = out.get(key)
-        if prior is None:
-            out[key] = {**rec, "src": src, "anchor": anchor}
-            return
-        if anchor:
-            return                       # an anchor entry never displaces a real record
-        if prior["anchor"]:
-            out[key] = {**rec, "src": src, "anchor": False}   # ...but a real record displaces it
-            return
-        if prior["src"] == src:
-            return                       # the same record seen twice
-        if prior["ps"] != rec["ps"] or prior["alt_hap"] != rec["alt_hap"]:
-            out[key] = {"ps": None, "alt_hap": None, "src": None,
-                        "anchor": False, "ambiguous": True}   # sticky: never un-marked
+    sites: dict[tuple[str, str], dict[tuple[str, str], dict]] = {}
 
     opener = gzip.open if str(phased).endswith(".gz") else open
     with opener(phased, "rt") as fh:
@@ -184,9 +171,14 @@ def _parse_phased(phased: Path) -> dict[tuple[str, str], dict]:
                 ps = sample[pi] if pi < len(sample) else None
             alt_hap = (0 if gt.split("|")[0] != "0" else 1) if "|" in gt else None
             rec = {"ps": ps, "alt_hap": alt_hap, "ambiguous": False}
-            place((chrom, pos), rec, (ref, alt))
-            if len(ref) != len(alt):       # indel: VEP/DuckDB anchor one base to the right
-                place((chrom, str(int(pos) + 1)), rec, (ref, alt), anchor=True)
+            sites.setdefault((chrom, pos), {}).setdefault((ref, alt), rec)
+    out: dict[tuple, dict] = {}
+    for (chrom, pos), alleles in sites.items():
+        if len(alleles) > 1:
+            alleles = {a: {"ps": None, "alt_hap": None, "ambiguous": True} for a in alleles}
+        for (ref, alt), rec in alleles.items():
+            out[vep_key(chrom, int(pos), ref, alt)] = rec
+        out[(chrom, pos)] = next(iter(alleles.values()))
     return out
 
 
@@ -196,11 +188,11 @@ def _verdict(cg: dict, phased: dict) -> dict:
     placed = []          # (pos, ps, alt_hap, variant)
     n_ambiguous = 0
     for v in cg["variants"]:
-        rec = phased.get((chrom, str(v["pos"])))
+        rec = phased.get((chrom, int(v["pos"]), v["ref"], v["alt"]))
         if rec is None:
             placed.append((v["pos"], None, None, v))           # not in phased output
         elif rec.get("ambiguous"):
-            n_ambiguous += 1                                   # two ALTs share this key
+            n_ambiguous += 1                                   # two ALTs at one VCF POS
             placed.append((v["pos"], None, None, v))
         else:
             placed.append((v["pos"], rec["ps"], rec["alt_hap"], v))
@@ -229,7 +221,7 @@ def _verdict(cg: dict, phased: dict) -> dict:
     else:
         verdict = "unphased (variants in separate blocks — relative phase unknown)"
     if n_ambiguous:
-        verdict += (f" · {n_ambiguous} multiallelic position(s) not separable by coordinate")
+        verdict += (f" · {n_ambiguous} allele(s) at a multiallelic position left unphased")
     return {"gene": cg["gene"], "chrom": chrom, "n": len(cg["variants"]),
             "n_phased": n_phased, "blocks": len(blocks), "in_trans": in_trans,
             "n_ambiguous": n_ambiguous, "verdict": verdict, "placed": placed}
@@ -297,9 +289,9 @@ def phase_report(sample: str, force: bool = False) -> Path:
         "claimed only when *every* damaging variant in the gene was placed in a single phase "
         "block. When some remain unplaced the verdict is **partially resolved**: the shared "
         "copy is established, the other one is not.",
-        "- A **multiallelic position** (two different damaging ALT alleles at one coordinate) "
-        "cannot be told apart by the position-keyed lookup this report uses, so it is left "
-        "unphased rather than guessed at.",
+        "- A **multiallelic position** (two different ALT alleles at one VCF position) is left "
+        "unphased rather than guessed at: WhatsHap phases only one record at a shared "
+        "position.",
         "- **Configuration ≠ pathogenicity:** \"damaging\" here is LOF or "
         "deleterious-missense (SIFT/PolyPhen); confirm the variants are truly damaging.",
         "- **Read-backed range** is ~hundreds of bp to ~1 kb; variants farther apart read as "

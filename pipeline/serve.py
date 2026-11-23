@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import quote, unquote, urlparse
 
 from . import config
 from .util import log
@@ -47,7 +47,11 @@ class _Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         parsed = urlparse(self.path)
-        rel = parsed.path.lstrip("/")
+        # Browsers percent-encode non-ASCII and spaces in a person's page name. Decode before
+        # the path checks below, which then see the real path whatever was encoded in it.
+        rel = unquote(parsed.path).lstrip("/")
+        if "\0" in rel:     # no file has this name, and path calls raise on it
+            return self._send(404, b'{"error":"not found"}')
         if rel in ("", "index.html"):
             # One landing page, the static one `render` writes — the same file whether it
             # is opened from disk or reached here. Redirect rather than serve its bytes at
@@ -67,7 +71,8 @@ class _Handler(BaseHTTPRequestHandler):
             html_root = (root / "reports" / "html").resolve()
             if html_root in moved.parents and moved.is_file():
                 self.send_response(302)
-                self.send_header("Location", "/reports/html/" + rel[len("reports/"):])
+                # Re-encoded: an HTTP header cannot carry the decoded name.
+                self.send_header("Location", "/reports/html/" + quote(rel[len("reports/"):]))
                 self.send_header("Content-Length", "0")
                 self.end_headers()
                 return None

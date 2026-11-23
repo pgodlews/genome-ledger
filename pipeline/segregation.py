@@ -33,9 +33,10 @@ from pathlib import Path
 
 from . import reportpaths
 from . import config, pedigree
+from .allele_balance import vep_key
 from .call import aligned_cram
 from .denovo import (CONFIRMED, INHERITED, _pileup_parent, _read_parent, _write_sites,
-                     parent_callsets, parent_verdict)
+                     parent_call, parent_callsets, with_pileup)
 from .forcecall import call_at_sites
 from .load import TABLE, connect
 from .panel import load_panel, sql_in_list
@@ -104,24 +105,16 @@ def _parent_calls(con, snap: str, callsets: list[str], variants) -> set[tuple]:
 def _same_event(v: dict, ref: str, alt: str) -> bool:
     """Does a VCF record's (ref, alt) spell the same event as VEP's (v['ref'], v['alt'])?
 
-    VEP drops the shared anchor base and writes '-' for the emptied side, so the VCF form is
-    recoverable exactly — and anything short of an exact reconstruction is a *different*
+    Compared through `vep_key`, the one mapping from VCF to VEP form: VEP drops a shared
+    anchor base and writes '-' for an emptied side, and a delins `bcftools norm` has already
+    trimmed (TT>G) has no anchor to drop. Anything short of an exact match is a *different*
     variant. Matching on "is an indel" alone (`len(ref) != len(alt)`, which this used to do)
     binds the first indel record at the position: `normalize` runs `bcftools norm -m -both`,
     which splits multiallelics into separate records at one POS, and ~14% of indel records in
     a real normalized VCF share a position with another one. That coin-flip then force-calls
     the parents at the wrong allele and the cis/trans verdict rests on it, so a miss here is
     worse than the unresolved-and-dropped path a non-match takes."""
-    vr, va = v["ref"].upper(), v["alt"].upper()
-    ref, alt = ref.upper(), alt.upper()
-    if va == "-":                     # deletion: VCF is <anchor><deleted> -> <anchor>
-        return alt == ref[:1] and ref[1:] == vr
-    if vr == "-":                     # insertion: VCF is <anchor> -> <anchor><inserted>
-        return ref == alt[:1] and alt[1:] == va
-    # delins, where VEP trims the anchor but leaves both sides non-empty (VCF ATT>AG at p is
-    # VEP TT>G at p+1). These used to take the exact-match branch, which can never match the
-    # VCF's anchored form, so they were silently dropped from read-level confirmation.
-    return ref[1:] == vr and alt[1:] == va
+    return vep_key("", 0, ref.upper(), alt.upper())[2:] == (v["ref"].upper(), v["alt"].upper())
 
 
 def _vcf_alleles(child: str, variants: list[dict]) -> int:
@@ -170,7 +163,9 @@ def _vcf_alleles(child: str, variants: list[dict]) -> int:
         else:
             for pos in (v["pos"] - 1, v["pos"]):
                 for ref, alt in found.get((v["chrom"], pos), []):
-                    if _same_event(v, ref, alt):
+                    # The same alleles one base away are a different variant.
+                    if _same_event(v, ref, alt) and vep_key(
+                            "", pos, ref.upper(), alt.upper())[1] == v["pos"]:
                         hit = (pos, ref, alt)
                         break
                 if hit:
@@ -238,14 +233,13 @@ def _read_evidence(child: str, parents: list[str], variants: list[dict],
         regions.write_text("".join(f"{v['chrom']}\t{v['vcf_pos']}\n" for v in need))
         pile = _pileup_parent(parent, regions, key, wd, force)
         for v in need:
-            gt, dp, alt_ad = calls.get((v["chrom"], v["vcf_pos"]), ("", 0, 0))
-            status, detail = parent_verdict(gt, dp, alt_ad)
+            site = (v["chrom"], v["vcf_pos"])
+            allele = (v["vcf_pos"], v["vcf_ref"], v["vcf_alt"])
+            status, detail = with_pileup(parent_call(calls.get(site), *allele),
+                                         pile.get(site), *allele)
             # denovo's vocabulary is about the *child's* variant being new; here the same
             # evidence answers "does this parent carry it", so translate once, at the source.
             status = {INHERITED: "carries", CONFIRMED: "absent"}.get(status, "unknown")
-            nonref = pile.get((v["chrom"], v["vcf_pos"]))
-            if nonref is not None and nonref >= config.DN_PILEUP_MIN_ALT:
-                status, detail = "carries", f"{nonref} non-ref reads (pileup)"
             out[(parent, v["key"])] = (status, detail)
     return out
 
@@ -270,6 +264,10 @@ def transmission(dad: str, mum: str) -> str:
 def resolve(variants: list[dict]) -> tuple[str, str]:
     """(verdict, why) for one gene's damaging het variants, from their transmissions."""
     tr = [v["transmission"] for v in variants]
+    # First, because it holds whatever the other variants turn out to be: one copy from each
+    # parent, each hit, is both copies hit.
+    if PATERNAL in tr and MATERNAL in tr:
+        return IN_TRANS, "a variant from each parent, so both copies carry one"
     if any(t == UNRESOLVED for t in tr):
         return UNRESOLVED, "at least one variant's parental origin could not be established"
     if any(t == DE_NOVO for t in tr):
@@ -278,8 +276,6 @@ def resolve(variants: list[dict]) -> tuple[str, str]:
     if any(t == BOTH for t in tr):
         return UNRESOLVED, ("both parents carry at least one of these, so the child's two "
                             "copies cannot be told apart by transmission alone")
-    if PATERNAL in tr and MATERNAL in tr:
-        return IN_TRANS, "one variant from each parent, so they sit on opposite copies"
     parent = "father" if tr[0] == PATERNAL else "mother"
     return IN_CIS, f"every variant came from the {parent}, so they share one copy"
 

@@ -63,7 +63,9 @@ def _load_targets(path: str) -> dict[int, str]:
 
 def _load_strand_pair(path: str, n_tracks: int) -> list[int] | None:
     """index → index of that track's opposite-strand partner, from the targets file's
-    `strand_pair` column. None when the file has no such column.
+    `strand_pair` column. None when the file has no such column, or is too short or
+    inconsistent to be the whole table (a truncated download): tracks past the cut would keep
+    their own index and be averaged against their opposite strand.
 
     Needed only for stranded models. Borzoi's RNA-seq/CAGE targets come in +/- pairs, so
     reverse-complementing the input sequence does not merely reverse the bins — it also swaps
@@ -77,7 +79,7 @@ def _load_strand_pair(path: str, n_tracks: int) -> list[int] | None:
             rows = list(csv.DictReader(fh, delimiter="\t"))
     except OSError:
         return None
-    if not rows or "strand_pair" not in rows[0]:
+    if len(rows) < n_tracks or "strand_pair" not in rows[0]:
         return None
     pair = list(range(n_tracks))
     for i, row in enumerate(rows):
@@ -89,6 +91,9 @@ def _load_strand_pair(path: str, n_tracks: int) -> list[int] | None:
             return None
         if 0 <= j < n_tracks:
             pair[i] = j
+    # Partners are mutual; anything else is a damaged file (e.g. a number cut in half).
+    if any(pair[pair[i]] != i for i in range(n_tracks)):
+        return None
     return pair
 
 
@@ -179,7 +184,7 @@ def main() -> int:
         if pairs is None:
             rc = False
             print(f"[worker] {args.model} is strand-specific but {args.targets} has no "
-                  f"strand_pair column — reverse-complement averaging DISABLED (averaging "
+                  f"complete strand_pair column — reverse-complement averaging DISABLED (averaging "
                   f"without the track swap would cancel stranded signal). Supply the model's "
                   f"own targets file to re-enable it.", file=sys.stderr)
         elif pairs == list(range(spec["n_tracks"])):

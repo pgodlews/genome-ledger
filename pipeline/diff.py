@@ -157,7 +157,12 @@ def score_pair(con, prev: str, curr: str) -> list[dict]:
             p.clinvar_sig, c.clinvar_sig,
             p.clinvar_revstat, c.clinvar_revstat,
             p.gnomad_af, c.gnomad_af,
-            c.zygosity, c.clinvar_disease,
+            -- What the person carried and what it was linked to, also for a variant gone from
+            -- curr. The scored columns stay curr-only: a variant no longer in the callset has
+            -- no current consequence, and giving it one would earn ACMG evidence for a call
+            -- that no longer exists.
+            COALESCE(c.zygosity, p.zygosity)               AS zygosity,
+            COALESCE(c.clinvar_disease, p.clinvar_disease) AS clinvar_disease,
             c.consequence, c.sift, c.polyphen
         FROM (SELECT * FROM {TABLE}
               WHERE snapshot_id = ? AND sample_id IN ({placeholders})) c
@@ -221,14 +226,36 @@ def score_pair(con, prev: str, curr: str) -> list[dict]:
     return findings
 
 
-def by_person(findings: list[dict], fam, scanned: dict[str, int]) -> list[dict]:
+def _new_callset_carriers(con, curr: str, new: list[str], findings: list[dict],
+                          fam) -> set[tuple]:
+    """{(person, chrom, pos, ref, alt)} for T2T findings that a non-T2T callset added in `curr`
+    also carries. That callset has no earlier snapshot to be compared against, so it cannot
+    produce a finding of its own, but it does show the variant is not a T2T-only call."""
+    others = [s for s in new if not s.endswith("_t2t")]
+    keys = {(f["chrom"], f["pos"], f["ref"], f["alt"]) for f in findings
+            if f["sample"].endswith("_t2t")}
+    if not others or not keys:
+        return set()
+    positions = sorted({k[1] for k in keys})
+    rows = con.execute(
+        f"SELECT sample_id, chrom, pos, ref, alt FROM {TABLE} WHERE snapshot_id = ? "
+        f"AND sample_id IN ({','.join('?' * len(others))}) "
+        f"AND pos IN ({','.join('?' * len(positions))})",
+        [curr, *others, *positions]).fetchall()
+    return {(fam.person_of(s), c, p, r, a) for s, c, p, r, a in rows if (c, p, r, a) in keys}
+
+
+def by_person(findings: list[dict], fam, scanned: dict[str, int],
+              corroborated: set[tuple] = frozenset()) -> list[dict]:
     """One report row per (person, variant) from the per-callset findings.
 
     One genome called three times is one change to review, not three. The row keeps the
-    strongest callset's verdict and says how many callsets found it. T2T calls are lifted and
-    used for concordance, so a change seen only there is capped at `monitor` and cannot raise
-    an alert. A lifted callset's chrM rows are left out (`sexchrom`). `triage_results` keeps
-    every per-callset verdict."""
+    strongest callset's verdict and says how many callsets found it, out of the callsets that
+    were compared (`scanned`). T2T calls are lifted and used for concordance, so a change seen
+    only there is capped at `monitor` and cannot raise an alert, unless a callset new in this
+    snapshot also carries it (`corroborated`, see `_new_callset_carriers`). A lifted callset's
+    chrM rows are left out (`sexchrom`), so it is not counted as disagreeing there either.
+    `triage_results` keeps every per-callset verdict."""
     order = {t: i for i, t in enumerate(triage.TIERS)}
     groups: dict[tuple, list[dict]] = {}
     for f in findings:
@@ -237,11 +264,13 @@ def by_person(findings: list[dict], fam, scanned: dict[str, int]) -> list[dict]:
         key = (fam.person_of(f["sample"]), f["chrom"], f["pos"], f["ref"], f["alt"])
         groups.setdefault(key, []).append(f)
     out = []
-    for (person, *_), fs in groups.items():
+    for (person, chrom, pos, ref, alt), fs in groups.items():
         best = min(fs, key=lambda f: (order[f["tier"]], -f["score"], f["sample"]))
         calls = {f["sample"]: f["zyg"] for f in fs}
-        total = max(scanned.get(person, 0), len(calls))
-        t2t_only = total > 1 and all(s.endswith("_t2t") for s in calls)
+        total = (len(calls) if sexchrom.contig(chrom) == "MT"
+                 else max(scanned.get(person, 0), len(calls)))
+        t2t_only = (all(s.endswith("_t2t") for s in calls)
+                    and (person, chrom, pos, ref, alt) not in corroborated)
         row = {**best, "sample": person, "calls": calls, "t2t_only": t2t_only,
                "support": f"{len(calls)}/{total}" if total > 1 else ""}
         if t2t_only and row["tier"] == "actionable_now":
@@ -266,12 +295,19 @@ def diff(prev: str, curr: str) -> tuple[Path, int, str]:
     _persist(con, prev, curr, findings)
     samples = [r[0] for r in con.execute(
         f"SELECT DISTINCT sample_id FROM {TABLE} WHERE snapshot_id = ?", [curr]).fetchall()]
+    in_prev = {r[0] for r in con.execute(
+        f"SELECT DISTINCT sample_id FROM {TABLE} WHERE snapshot_id = ?", [prev]).fetchall()}
     fam = pedigree.load(sequenced=set(samples))
+    # The denominator of "found in n of m": only callsets in both snapshots were compared. One
+    # added in `curr` has no change to report, which is not a disagreement.
     scanned: dict[str, int] = {}
     for s in samples:
-        person = fam.person_of(s)
-        scanned[person] = scanned.get(person, 0) + 1
-    findings = by_person(findings, fam, scanned)
+        if s in in_prev:
+            person = fam.person_of(s)
+            scanned[person] = scanned.get(person, 0) + 1
+    corroborated = _new_callset_carriers(con, curr, [s for s in samples if s not in in_prev],
+                                         findings, fam)
+    findings = by_person(findings, fam, scanned, corroborated)
     model_changes = con.execute("""
         SELECT p.chrom,p.pos,p.ref,p.alt,p.model_band,c.model_band,p.model_epoch,c.model_epoch
         FROM variant_history p JOIN variant_history c USING (chrom,pos,ref,alt)
@@ -305,7 +341,8 @@ def diff(prev: str, curr: str) -> tuple[Path, int, str]:
     def _row(f) -> str:
         badge = _TIER_BADGE.get(f["tier"], "·")
         var = f"{f['chrom']}:{f['pos']} {f['ref']}>{f['alt']}"
-        found = (f["support"] + (" (T2T only)" if f["t2t_only"] else "")) or "-"
+        found = " ".join(x for x in (f["support"], "(T2T only)" if f["t2t_only"] else "")
+                         if x) or "-"
         return (f"| {badge} | {f['sample']} | {f['gene'] or '?'} | "
                 f"{disease_name(f['disease'])} | {var} | {f['rationale']} | "
                 f"{f['score']:.2f} | {'★' * f['stars'] or '0★'} | {_zyg_cell(f, ab)} | {found} |")

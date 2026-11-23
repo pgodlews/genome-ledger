@@ -68,8 +68,13 @@ def hla_report(sample: str, force: bool = False):
                       "Re-run after improving coverage (or use full HLA typing) before "
                       "reading anything into a negative result.")
         else:
-            celiac = ("Celiac disease is genetically **very unlikely** — neither DQ2.5 nor "
-                      "DQ8 present (>99% of celiac patients carry one of these).")
+            # A tag negative is narrower than "no risk haplotype". The DQ2.5 tag marks the cis
+            # haplotype only, so DQ2.5 formed in trans and DQ2.2 both read as absent here.
+            celiac = ("Celiac susceptibility is **not ruled out** — neither tagged haplotype "
+                      "was detected. The DQ2.5 tag sees only the cis haplotype "
+                      "(`DQA1*05:01`-`DQB1*02:01`); it cannot see DQ2.5 formed in trans "
+                      "(`DQA1*05:05` with `DQB1*02:02`) or DQ2.2. Use full HLA typing "
+                      "(`hla-type`) to settle it.")
     else:
         hap = " + ".join(h for h, p in [("DQ2.5", dq25), ("DQ8", dq8)] if p)
         celiac = (f"Carries a celiac-susceptibility haplotype (**{hap}**). Necessary but "

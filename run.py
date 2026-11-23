@@ -245,7 +245,8 @@ def cmd_query(args) -> int:
     params = dict(p.split("=", 1) for p in (args.param or []))
     sql = open(args.sqlfile).read()
     for k, v in params.items():
-        sql = sql.replace(f"${{{k}}}", v)
+        # Every placeholder sits inside a quoted literal, so a quote in the value is doubled.
+        sql = sql.replace(f"${{{k}}}", v.replace("'", "''"))
     con = duckdb.connect(str(config.DUCKDB_FILE), read_only=True)
     rows = con.execute(sql).fetchall()
     cols = [d[0] for d in con.description]
@@ -290,6 +291,21 @@ def cmd_demo(args) -> int:
         config.DEMO_NOTICE, config.PRS_S1_GATE = saved
 
 
+def _enter_demo_root(args) -> Path:
+    """Clean (once) and switch to the demo's own root. `main` calls this before it opens the
+    log file, so a demo run writes nothing under the real GENOMES_ROOT."""
+    from pathlib import Path
+    import shutil
+
+    demo_root = Path(args.out_dir).resolve()
+    if args.clean and demo_root.exists():
+        print(f"Cleaning existing demo directory: {demo_root}", file=sys.stderr)
+        shutil.rmtree(demo_root)
+    args.clean = False      # the log file may live here from now on
+    config.set_genomes_root(demo_root)
+    return demo_root
+
+
 def _run_demo(args) -> int:
     from pipeline import demo as demo_mod
     import json
@@ -297,17 +313,13 @@ def _run_demo(args) -> int:
     import shutil
     from pipeline.util import today
 
-    demo_root = Path(args.out_dir).resolve()
-    if args.clean and demo_root.exists():
-        log.info("Cleaning existing demo directory: %s", demo_root)
-        shutil.rmtree(demo_root)
+    demo_root = _enter_demo_root(args)
 
     log.info("================================================================================")
     log.info("Starting Genome Ledger Demo (Zero-Data Mode)")
     log.info("Output directory: %s", demo_root)
     log.info("================================================================================")
 
-    config.set_genomes_root(demo_root)
     for d in (config.REPORTS_DIR, config.MANIFEST_DIR, config.FAMILY_FILE.parent,
               config.RAW_DIR, config.NORMALIZED_DIR, config.CALLED_DIR,
               config.DUCKDB_DIR, config.SNAPSHOTS_DIR, config.TRAITS_DIR):
@@ -761,6 +773,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str]) -> int:
     args = build_parser().parse_args(argv)
+    if args.cmd == "demo":
+        _enter_demo_root(args)
     setup_logging(args.verbose)
     match args.cmd:
         case "setup":
@@ -834,7 +848,7 @@ def main(argv: list[str]) -> int:
                 for pair in args.id_map.split(","):
                     old_id, _, new_id = pair.partition("=")
                     old_id, new_id = old_id.strip(), new_id.strip()
-                    if not old_id or not new_id or old_id == new_id:
+                    if not old_id or not new_id or old_id == new_id or old_id in mapping:
                         raise SystemExit(f"--map: bad entry {pair!r}; expected OLD=NEW")
                     mapping[old_id] = new_id
             family_migrate_mod.migrate(apply=args.apply,

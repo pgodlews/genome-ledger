@@ -17,6 +17,7 @@ import json
 import os
 import subprocess
 from pathlib import Path
+from urllib.parse import unquote, urlsplit
 
 from . import reportpaths
 from . import config
@@ -39,9 +40,21 @@ def _cram_ref_dir(cram: Path) -> str | None:
     for line in out.stdout.splitlines():
         if line.startswith("@SQ") and "\tUR:" in line:
             ur = next(f[3:] for f in line.split("\t") if f.startswith("UR:"))
-            ref_dir = str(Path(ur).parent)
+            ref_path = _ur_path(ur)
+            if ref_path is None:
+                return None      # a remote URL: there is no local directory to bind over
+            ref_dir = str(Path(ref_path).parent)
             return None if ref_dir == str(config.REF_FASTA.parent) else ref_dir
     raise SystemExit(f"No @SQ UR tag found in {cram} header")
+
+
+def _ur_path(ur: str) -> str | None:
+    """The filesystem path in an @SQ UR value, or None when it names a remote URL. UR may be
+    a bare path or a file: URI; Path() on the URI kept the scheme ('file:/refs'), which is
+    not a usable docker bind-mount target."""
+    if ur.startswith("file:"):
+        return unquote(urlsplit(ur).path)
+    return None if "://" in ur else ur
 
 
 def _run_arcashla(cram: Path, out_dir: Path, sample: str) -> Path:
@@ -97,9 +110,12 @@ def _four_digit(allele: str) -> str:
 # HLA-B*27 subtypes NOT associated with ankylosing spondylitis (Khan 2013; the classic
 # exceptions to the B27 association).
 _B27_NON_ASSOCIATED = frozenset({"B*27:06", "B*27:09"})
-# DQA1 alleles that form the DQ2.5 heterodimer with DQB1*02:01 — *05:05 encodes the same
-# mature alpha chain as *05:01.
+# DQA1 alleles that form the DQ2.5 heterodimer with a DQB1*02 beta chain — *05:05 encodes the
+# same mature alpha chain as *05:01.
 _DQA1_DQ25 = frozenset({"DQA1*05:01", "DQA1*05:05"})
+# *02:02 differs from *02:01 by one residue outside the peptide-binding groove. It is the beta
+# chain of DR7-DQ2.2, so it is the one a DR5-DQ7 / DR7-DQ2.2 person pairs with DQA1*05:05.
+_DQB1_DQ25 = frozenset({"DQB1*02:01", "DQB1*02:02"})
 
 
 def _risk_calls(genotype: dict[str, list[str]]) -> list[str]:
@@ -123,10 +139,10 @@ def _risk_calls(genotype: dict[str, list[str]]) -> list[str]:
         calls.append(f"**HLA-B27**: {'present' if b27 else 'absent'} "
                      f"({', '.join(b) or 'no B calls'})")
 
-    # DQA1*05:05 encodes the same mature DQ alpha chain as *05:01 and pairs with DQB1*02:01
-    # to form the identical DQ2.5 heterodimer (it is the allele carried on the common
-    # DR7-DQ2.2 / DR5-DQ7 trans haplotype). Testing only *05:01 missed those carriers.
-    dq25 = bool(set(dqa1) & _DQA1_DQ25) and "DQB1*02:01" in dqb1
+    # The heterodimer forms whether its two chains come from one haplotype (DR3: DQA1*05:01 +
+    # DQB1*02:01) or from both (DR5-DQ7 / DR7-DQ2.2: DQA1*05:05 + DQB1*02:02), so this needs
+    # no phasing. Requiring *02:01 reported every trans carrier as "neither".
+    dq25 = bool(set(dqa1) & _DQA1_DQ25) and bool(set(dqb1) & _DQB1_DQ25)
     dq8 = "DQB1*03:02" in dqb1
     hap = " + ".join(h for h, p in [("DQ2.5", dq25), ("DQ8", dq8)] if p) or "neither"
     calls.append(f"**Celiac haplotype** (DQ2.5/DQ8): {hap} "
@@ -178,7 +194,8 @@ def hla_typing_report(sample: str, force: bool = False) -> Path:
         "a het that collapsed to one), the tool's known limitation, not a data gap.",
         "- Compare against `hla` (tag-SNP report) for the same sample — the risk calls "
         "here should agree; a disagreement means the tag SNP tags an uncommon haplotype "
-        "for this genome and the typed allele here is the more trustworthy call.",
+        "for this genome, or DQ2.5 formed in trans, which the tag cannot see. The typed "
+        "allele here is the more trustworthy call.",
         "- Research-grade; clinically actionable HLA results (e.g. B27, celiac) warrant "
         "confirmatory testing.",
         "",

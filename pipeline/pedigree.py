@@ -275,14 +275,18 @@ def generate_pedigree_ped(family: Family | None = None, path: Path | None = None
     def _row(sample: str, p: Person) -> str:
         # The suffix that makes this callset ("" for the bare one). A callset's parent
         # column points at the parent callset carrying the SAME suffix when one was
-        # ingested (a T2T child against T2T parents), and falls back to the parent's bare
-        # id otherwise — PED tooling keys on the sample id as it appears in the VCF.
+        # ingested (a T2T child against T2T parents), then the parent's bare id, then whatever
+        # callset they do have — PED tooling keys on the sample id as it appears in the VCF.
         suffix = sample[len(p.id):]
 
         def parent(par: str | None) -> str:
             if not par:
                 return "0"
-            return par + suffix if family.is_ingested(par + suffix) else par
+            if family.is_ingested(par + suffix):
+                return par + suffix
+            if family.is_ingested(par):
+                return par
+            return next(iter(family.callsets(par)), par)
 
         return "\t".join(["FAM1", sample, parent(p.father), parent(p.mother),
                           _SEX_CODE.get(p.sex, "0"), "0"])

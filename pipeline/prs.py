@@ -39,6 +39,7 @@ from pathlib import Path
 
 from . import reportpaths
 from . import config, consent, forcecall
+from .traits import _merge_records
 from .util import (PASS_ONLY, faidx_bases, file_token, log, require_tools,
                    stamp_is_current,
                    write_report, write_stamp)
@@ -115,7 +116,9 @@ _PASS_ONLY = PASS_ONLY   # shared with traits/HLA — see util.PASS_ONLY
 
 
 def _present_genotypes(vcf: Path, variants) -> dict[tuple[str, str], tuple[str, str, str]]:
-    """(chrom,pos) → (REF, ALT, GT) for the score's PASS-filtered positions present in the VCF."""
+    """(chrom,pos) → (REF, ALT, GT) for the score's PASS-filtered positions present in the VCF.
+    Several records at one POS (a split 1/2, or a SNV and an indel on one anchor) come back as
+    one multiallelic record; keyed by position alone, the last used to replace the others."""
     regions = "".join(f"{c}\t{p}\n" for c, p, *_ in variants)
     # Per-process name: PGS_DIR is shared across samples, so a fixed name would let two
     # concurrent runs clobber each other's region file.
@@ -146,14 +149,14 @@ def _present_genotypes(vcf: Path, variants) -> dict[tuple[str, str], tuple[str, 
             f"bcftools query failed on {vcf.name} (rc={proc.returncode}): "
             f"{' '.join(proc.stderr.split())[:300]}")
     out = proc.stdout
-    present = {}
+    records: dict[tuple[str, str], list[tuple[str, str, str]]] = {}
     for line in out.splitlines():
         f = line.split("\t")
         if len(f) < 5:   # malformed/truncated bcftools output line — skip, don't crash
             continue
         c, p, ref, alt, gt = f[:5]
-        present[(c, p)] = (ref, alt, gt)
-    return present
+        records.setdefault((c, p), []).append((ref, alt, gt))
+    return {k: _merge_records(v) for k, v in records.items()}
 
 
 def _ref_bases(absent) -> dict[tuple[str, str], str]:
@@ -167,7 +170,107 @@ def _dosage(effect: str, alleles: list[str]) -> int:
     return sum(1 for a in alleles if a == effect)
 
 
-def _score_one(vcfs, variants) -> tuple[float, int, int, dict]:
+_ACGT = frozenset("ACGT")
+
+
+def _row_others(oa: str) -> list[str]:
+    """The row's other allele(s); `hm_inferOtherAllele` can list several as 'A/T'."""
+    return [a for a in oa.upper().split("/") if a]
+
+
+def _is_snv_row(ea: str, oa: str) -> bool:
+    return len(ea) == 1 and all(len(a) == 1 for a in _row_others(oa))
+
+
+def _trim(ref: str, alt: str) -> tuple[str, str]:
+    """Drop the shared right-hand bases that multiallelic form adds (AT>GT is A>G)."""
+    while len(ref) > 1 and len(alt) > 1 and ref[-1] == alt[-1]:
+        ref, alt = ref[:-1], alt[:-1]
+    return ref, alt
+
+
+def _panel_row_ref(rec: tuple | None, ea: str, others: list[str]) -> str | None:
+    """REF of an indel row as the 1000G record at its position states it, None if the record
+    does not describe exactly one REF for this row's alleles."""
+    if not rec:
+        return None
+    alleles = {ea.upper(), *others}
+    refs = {r for r, a in (_trim(rec[0], x) for x in rec[1].split(","))
+            if r != a and {r, a} <= alleles}
+    return refs.pop() if len(refs) == 1 else None
+
+
+def _indel_row_refs(rows, freqs: dict | None = None) -> dict[tuple[str, str, str, str], str | None]:
+    """(chrom,pos,effect,other) → the REF allele of each non-SNV row, or None if unknowable.
+
+    A scoring file does not say which allele is REF, and one reference base cannot tell: at
+    reference `AT`, the row A/AT is either a deletion of the T (REF=AT) or an insertion of a
+    second T (REF=A), and hom-ref means two copies of a different allele in each case. A row
+    where exactly one allele matches the reference is resolved from the reference; where both
+    match, the 1000G record at that position (`freqs`) states which is REF.
+
+    Decided from those two sources, never from the sample's genotype. Scoring an ambiguous
+    row only for people who carry it would select sites by genotype, the ascertainment bias
+    the percentile section below describes.
+    """
+    keys = [(c, p, ea, oa) for c, p, ea, oa, *_ in rows if not _is_snv_row(ea, oa)]
+    if not keys:
+        return {}
+    spans: dict[tuple[str, str, str, str], list[tuple[str, str]]] = {}
+    for c, p, ea, oa in keys:
+        alleles = [ea.upper(), *_row_others(oa)]
+        if not p.isdigit() or any(set(a) - _ACGT for a in alleles):
+            continue
+        spans[(c, p, ea, oa)] = [(c, str(int(p) + i)) for i in range(max(map(len, alleles)))]
+    bases = _ref_bases(sorted({q for span in spans.values() for q in span}))
+    out: dict[tuple[str, str, str, str], str | None] = dict.fromkeys(keys)
+    for key, span in spans.items():
+        if any(q not in bases for q in span):
+            continue
+        seq = "".join(bases[q] for q in span)
+        others = _row_others(key[3])
+        hits = [a for a in (key[2].upper(), *others) if seq.startswith(a)]
+        if others and len(hits) == 1:
+            out[key] = hits[0]
+        elif others and hits and freqs:
+            out[key] = _panel_row_ref(freqs.get((key[0], key[1])), key[2], others)
+    return out
+
+
+def _record_dosage(ea: str, oa: str, row_ref: str | None, rec) -> int | None:
+    """Copies of this row's effect allele in one (merged) VCF record, None if unresolved."""
+    ref, alt, gt = rec
+    coding = [ref, *alt.split(",")]
+    fields = gt.replace("|", "/").split("/")
+    called = [g for g in fields if g not in (".", "")]
+    if not called or len(called) < len(fields):
+        # "./." called nothing. A PARTIAL no-call ("1/.") knows one allele only: the doubling
+        # below is for haploid genotypes, and applying it here invented a homozygote, so
+        # "1/." scored two effect alleles, indistinguishable from a confirmed "1/1".
+        return None
+    try:
+        idx = [int(g) for g in called]
+        alleles = [coding[i] for i in idx]
+    except (ValueError, IndexError):
+        return None
+    if _is_snv_row(ea, oa):
+        # A SNV row asks about one base. An indel anchored here leaves that base unchanged.
+        alleles = [a[0].upper() for a in alleles]
+    else:
+        if row_ref not in (ea.upper(), *_row_others(oa)):
+            return None
+        # A copy carrying some OTHER variant here has neither of this row's alleles.
+        alleles = [row_ref if i == 0
+                   else (_trim(ref, coding[i])[1] if _trim(ref, coding[i])[0] == row_ref else "")
+                   for i in idx]
+    if len(alleles) == 1:
+        # A genuinely haploid call — ONE GT field, not a half-missing diploid one: chrX/chrY
+        # in a male, or chrM. Doubling puts it on the same 0-2 dosage scale as an autosome.
+        alleles *= 2
+    return _dosage(ea.upper(), alleles)
+
+
+def _score_one(vcfs, variants, freqs: dict | None = None) -> tuple[float, int, int, dict]:
     """Returns (raw score, n_used, n_carrying, contrib) where contrib maps
     (chrom,pos,effect,other) → dosage×weight for every scored variant — used to recompute the score over exactly the
     subset that has a 1000G frequency, so the percentile compares like with like.
@@ -194,39 +297,23 @@ def _score_one(vcfs, variants) -> tuple[float, int, int, dict]:
         remaining = [v for v in remaining if (v[0], v[1]) not in found]
     absent = [(c, p) for c, p, *_ in variants if (c, p) not in present]
     refbases = _ref_bases(absent)
-    total, n_carry, n_used = 0.0, 0, 0
+    indel_refs = _indel_row_refs(variants, freqs)
+    total, n_carry, n_used, n_unresolved = 0.0, 0, 0, 0
     contrib: dict[tuple[str, str, str, str], float] = {}
     for c, p, ea, oa, w in variants:
+        snv = _is_snv_row(ea, oa)
+        row_ref = indel_refs.get((c, p, ea, oa))
+        if set(ea.upper()) - _ACGT or (not snv and row_ref is None):
+            n_unresolved += 1             # REF unknowable: skipped for every sample alike
+            continue
         if (c, p) in present:
-            ref, alt, gt = present[(c, p)]
-            coding = [ref, *alt.split(",")]
-            fields = gt.replace("|", "/").split("/")
-            called = [g for g in fields if g not in (".", "")]
-            if not called:
-                continue                      # "./." — nothing was called here
-            if len(called) < len(fields):
-                # A PARTIAL no-call ("1/."): one allele is known, the other was not called.
-                # The doubling below is for haploid genotypes, and applying it here invented
-                # a homozygote — "1/." scored two effect alleles, indistinguishable from a
-                # confirmed "1/1". The site is unresolved, so it stays out of the score
-                # exactly as "./." does rather than being guessed at in the risk-raising
-                # direction.
-                continue
-            try:
-                alleles = [coding[int(g)] for g in called]
-            except (ValueError, IndexError):
-                continue
-            if len(alleles) == 1:
-                # A genuinely haploid call — ONE GT field, not a half-missing diploid one:
-                # chrX/chrY in a male, or chrM. Doubling puts it on the same 0-2 dosage
-                # scale as an autosomal genotype.
-                alleles *= 2
-            d = _dosage(ea, alleles)
+            d = _record_dosage(ea, oa, row_ref, present[(c, p)])
         else:
-            rb = refbases.get((c, p))
-            if rb is None:
-                continue
-            d = _dosage(ea, [rb, rb])
+            rb = refbases.get((c, p)) if snv else row_ref
+            d = None if rb is None else _dosage(ea.upper(), [rb, rb])
+        if d is None:
+            n_unresolved += 1
+            continue
         # Counted for BOTH branches. n_carry used to be incremented only for sites present
         # in the VCF, while `total` also summed the reference-inferred ones — so wherever the
         # effect allele IS the reference allele (absent ⇒ two copies), the headline count and
@@ -236,12 +323,32 @@ def _score_one(vcfs, variants) -> tuple[float, int, int, dict]:
         total += d * w
         contrib[(c, p, ea, oa)] = d * w
         n_used += 1
+    if n_unresolved:
+        log.info("  %d of %d score row(s) unresolved (no-call, or REF not determinable) and "
+                 "left out of the score.", n_unresolved, len(variants))
     return total, n_used, n_carry, contrib
 
 
 # --- percentile calibration against 1000 Genomes ----------------------------
 def _kg_cache(pid: str) -> Path:
-    return config.PGS_DIR / f"{pid}_1kg_af.tsv"
+    # v2: co-located records are merged. A file under the old name holds only the last record
+    # at such a position, and nothing inside it says so, so it must not be read back.
+    return config.PGS_DIR / f"{pid}_1kg_af.v2.tsv"
+
+
+def _merge_freq(a: tuple, b: tuple) -> tuple:
+    """Two 1000G records at one POS as one multiallelic (REF, ALT, AF_EUR, AF), on the longer
+    REF. The panel holds a SNV and an indel on one anchor as separate records."""
+    ref = a[0] if len(a[0]) >= len(b[0]) else b[0]
+    if not (ref.startswith(a[0]) and ref.startswith(b[0])):
+        return a                       # not one site; cannot occur in a valid VCF
+
+    def alts(rec):
+        return [x if x == "*" or x.startswith("<") else x + ref[len(rec[0]):]
+                for x in rec[1].split(",")]
+    if set(alts(b)) <= set(alts(a)):
+        return a                       # a repeated record must not count its frequency twice
+    return ref, ",".join(alts(a) + alts(b)), f"{a[2]},{b[2]}", f"{a[3]},{b[3]}"
 
 
 def _reference_freqs(pid: str, variants) -> dict[tuple[str, str], tuple]:
@@ -303,7 +410,8 @@ def _reference_freqs(pid: str, variants) -> dict[tuple[str, str], tuple]:
             if len(f) < 6:
                 continue
             ch = f[0][3:] if f[0].startswith("chr") else f[0]
-            freqs[(ch, f[1])] = (f[2], f[3], f[4], f[5])
+            rec = (f[2], f[3], f[4], f[5])
+            freqs[(ch, f[1])] = _merge_freq(freqs[(ch, f[1])], rec) if (ch, f[1]) in freqs else rec
         if len(freqs) == n_before:
             incomplete.append(chrom)
     if failed:
@@ -336,20 +444,42 @@ def _reference_freqs(pid: str, variants) -> dict[tuple[str, str], tuple]:
 
 
 def _effect_freq(ea: str, oa: str, rec: tuple) -> tuple[float, float] | None:
-    """(eur_freq, all_freq) of the effect allele, oriented against the 1000G REF/ALT."""
+    """(eur_freq, all_freq) of the effect allele, oriented against the 1000G REF/ALT, or None
+    when the panel does not describe this row's variant or a needed frequency is missing."""
     ref, alt, afe, afa = rec
     alts, fe, fa = alt.split(","), afe.split(","), afa.split(",")
+    if not len(alts) == len(fe) == len(fa):
+        return None
+    pairs = [_trim(ref, a) for a in alts]
     try:
-        if ea in alts:
-            i = alts.index(ea)
-            return float(fe[i]), float(fa[i])
-        if ea == ref:                      # effect allele is REF → 1 − Σ(alt freqs)
-            se = sum(float(x) for x in fe if x not in (".", ""))
-            sa = sum(float(x) for x in fa if x not in (".", ""))
-            return max(0.0, 1 - se), max(0.0, 1 - sa)
+        if _is_snv_row(ea, oa):
+            # Only substitutions change this base. An indel anchored here does not, and its
+            # ALT can spell the effect allele (AT>A) while being a different variant.
+            subs = [i for i, (r, a) in enumerate(pairs) if len(r) == len(a) == 1]
+            if not subs:
+                return None
+            for i in subs:
+                if pairs[i][1] == ea:
+                    return float(fe[i]), float(fa[i])
+            if ea != ref[0]:
+                return None
+            others = subs
+        else:
+            row = _row_others(oa)
+            hits = [i for i, (r, a) in enumerate(pairs)
+                    if (a == ea and r in row) or (r == ea and a in row)]
+            if len(hits) != 1:
+                return None
+            if pairs[hits[0]][1] == ea:
+                return float(fe[hits[0]]), float(fa[hits[0]])
+            others = list(range(len(alts)))
+        # Effect allele is REF → 1 − Σ(alt freqs). A missing "." raises here and the site is
+        # dropped: read as zero it made the REF frequency 1.0, a zero-variance site.
+        se = sum(float(fe[i]) for i in others)
+        sa = sum(float(fa[i]) for i in others)
+        return max(0.0, 1 - se), max(0.0, 1 - sa)
     except (ValueError, IndexError):
         return None
-    return None
 
 
 def _norm_cdf(z: float) -> float:
@@ -499,11 +629,25 @@ def _kg_population_map() -> dict[str, str]:
     if not config.KG_PANEL_FILE.exists():
         config.PGS_DIR.mkdir(parents=True, exist_ok=True)
         log.info("Downloading 1000G population map …")
+        # Atomic and bounded, as in _scoring_file. A short file left under the final name was
+        # read as the whole panel by every later run, and the reference scores cached from it
+        # silently covered only part of 1000G.
+        tmp = config.KG_PANEL_FILE.with_name(f"{config.KG_PANEL_FILE.name}.{os.getpid()}.part")
         try:
-            urllib.request.urlretrieve(config.KG_PANEL_URL, config.KG_PANEL_FILE)
+            with urllib.request.urlopen(config.KG_PANEL_URL,
+                                        timeout=config.PGS_DOWNLOAD_TIMEOUT) as r, \
+                    open(tmp, "wb") as fh:
+                shutil.copyfileobj(r, fh)
+                expected = r.headers.get("Content-Length")
+            got = tmp.stat().st_size
+            if expected is not None and got != int(expected):
+                raise OSError(f"got {got} of {expected} bytes")
+            os.replace(tmp, config.KG_PANEL_FILE)
         except Exception as e:  # noqa: BLE001 — best-effort, percentile degrades to none
             log.warning("1000G population map download failed (%s)", e)
             return {}
+        finally:
+            tmp.unlink(missing_ok=True)
     lines = config.KG_PANEL_FILE.read_text().splitlines()
     if not lines:
         return {}
@@ -757,15 +901,21 @@ def _ref_alleles(variants, workdir: Path) -> dict[tuple[str, str], str]:
     different variant sets and inflate the percentile — the asymmetry this whole supplement
     exists to remove.
 
-    When no pvars exist at all the reference run never happened, so there is no percentile to
-    stay symmetric with, and REF comes from the local FASTA instead. That is what keeps the
+    When no complete set of pvars exists the reference run did not finish, so there is no
+    percentile to stay symmetric with, and REF comes from the local FASTA instead. That is what keeps the
     reported raw score a property of the genome: previously a missing reference panel left
     the supplement silently at zero, so the same sample scored differently depending on
     whether the network was up when it ran.
     """
     want = {(v[0], v[1]) for v in variants}
     pvars = sorted(workdir.glob("chr*.pvar"))
-    if pvars:
+    # All or nothing. A failed extraction leaves the other chromosomes' pvars behind, and using
+    # them supplemented only those chromosomes: a raw score that was neither convention.
+    missing = {c for c, _p in want} - {f.name[3:-len(".pvar")] for f in pvars}
+    if pvars and missing:
+        log.warning("  1000G pvars under %s are incomplete (no chr%s) — not using them.",
+                    workdir.name, ", chr".join(sorted(missing)))
+    if pvars and not missing:
         refs: dict[tuple[str, str], str] = {}
         for pvar in pvars:
             for line in pvar.read_text().splitlines():
@@ -791,11 +941,19 @@ def _ref_alleles(variants, workdir: Path) -> dict[tuple[str, str], str]:
         return {}
     log.info("  no cached 1000G pvars under %s — resolving %d reference allele(s) from %s.",
              workdir.name, len(want), config.REF_FASTA.name)
-    return {k: b.upper() for k, b in faidx_bases(sorted(want)).items() if b}
+    refs = {k: b.upper() for k, b in faidx_bases(sorted(want)).items() if b}
+    # One base is not the REF of an indel row: use the span, and leave an ambiguous row out.
+    for (c, p, _ea, _oa), row_ref in _indel_row_refs(variants).items():
+        if row_ref is None:
+            refs.pop((c, p), None)
+        else:
+            refs[(c, p)] = row_ref
+    return refs
 
 
-def _ref_effect_supplement(variants, covered, workdir: Path) -> tuple[float, int]:
-    """(dosage owed, n variants) at score sites absent from the sample's variant-only VCF.
+def _ref_effect_supplement(variants, covered, workdir: Path,
+                           multi: dict | None = None) -> tuple[float, int]:
+    """(dosage owed, n variants) at score sites the sample's pgen does not hold.
 
     A variant-only VCF lists only sites where the sample is non-reference, so a score variant
     missing from it means homozygous reference. Where the effect allele is the ALT that
@@ -805,19 +963,39 @@ def _ref_effect_supplement(variants, covered, workdir: Path) -> tuple[float, int
     by 2·w for every such variant, which is exactly the error introduced by scoring the
     reference over the full variant set and the sample over only its own sites.
 
+    `multi` holds the sites the VCF DOES call but the pgen lost (see _multi_record_sites).
+    They are not hom-ref, so their dosage comes from the genotype.
+
+    Coordinates with several scoring rows are skipped: _write_score_file drops them from the
+    sample and the reference alike, so crediting one here would score it on one side only.
+
     Variants whose REF we cannot establish (absent from the 1000G reference pvar) are skipped:
     they are equally absent from the reference scoring, so the comparison stays symmetric."""
+    multi = multi or {}
+    counts = Counter((v[0], v[1]) for v in variants)
     # Resolve REF only where it is actually needed — a covered site already has an explicit
     # genotype in the pgen. On the FASTA path above this is the difference between a handful
     # of lookups and one per score variant.
-    uncovered = [v for v in variants if (v[0], v[1]) not in covered]
+    uncovered = [v for v in variants
+                 if (v[0], v[1]) not in covered and counts[(v[0], v[1])] == 1]
     refs = _ref_alleles(uncovered, workdir)
-    total, n = 0.0, 0
-    for chrom, pos, ea, _oa, w in uncovered:
+    total, n, n_unresolved = 0.0, 0, 0
+    for chrom, pos, ea, oa, w in uncovered:
         ref = refs.get((chrom, pos))
-        if ref is not None and ea.upper() == ref:
+        if ref is None:
+            continue
+        if (chrom, pos) in multi:
+            d = _record_dosage(ea, oa, ref, multi[(chrom, pos)])
+            if d is None:
+                n_unresolved += 1
+                continue
+            total += d * w
+            n += 1
+        elif ea.upper() == ref:
             total += 2.0 * w
             n += 1
+    if n_unresolved:
+        log.info("  %d multi-record site(s) unresolved and left out of the score.", n_unresolved)
     return total, n
 
 
@@ -831,6 +1009,44 @@ def _sample_covered(prefix: Path) -> set[tuple[str, str]]:
         if len(f) >= 2:
             covered.add((f[0], f[1]))
     return covered
+
+
+_multi_sites_memo: dict[tuple, dict] = {}
+
+
+def _multi_record_sites(vcf: Path) -> dict[tuple[str, str], tuple[str, str, str]]:
+    """(chrom,pos) → merged (REF, ALT, GT) at autosomal positions with 2+ PASS records.
+
+    `--rm-dup exclude-all` removes every record at such a position from the sample's pgen, so
+    the .pvar cannot show the sample was called there, and the supplement took a 1/2 site for
+    hom-ref. Read once per VCF per run: every genome-wide score needs the same answer."""
+    st = vcf.stat()
+    key = (str(vcf), st.st_size, st.st_mtime_ns)
+    if key in _multi_sites_memo:
+        return _multi_sites_memo[key]
+    out: dict[tuple[str, str], tuple[str, str, str]] = {}
+    group: list[tuple[str, str, str]] = []
+    site = None
+    proc = subprocess.Popen(["bcftools", "query", *_PASS_ONLY,
+                             "-f", "%CHROM\t%POS\t%REF\t%ALT[\t%GT]\n", str(vcf)],
+                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    for line in proc.stdout:
+        f = line.rstrip("\n").split("\t")
+        if len(f) < 5:
+            continue
+        here = (f[0].removeprefix("chr"), f[1])
+        if here != site:
+            if len(group) > 1 and site[0] in _AUTOSOMES:
+                out[site] = _merge_records(group)
+            site, group = here, []
+        group.append((f[2], f[3], f[4]))
+    if len(group) > 1 and site[0] in _AUTOSOMES:
+        out[site] = _merge_records(group)
+    if proc.wait():
+        raise RuntimeError(f"bcftools query failed on {vcf.name} (rc={proc.returncode})")
+    _multi_sites_memo.clear()          # one VCF at a time: a family run must not accumulate
+    _multi_sites_memo[key] = out
+    return out
 
 
 def _empirical_percentile(score: float, ref: list[tuple[str, float]]):
@@ -874,7 +1090,8 @@ def _score_entry(sample: str, entry: dict, gt_vcfs, out_dir: Path) -> dict:
         try:
             covered = _sample_covered(_pgen(sample))
             supp, n_supp = _ref_effect_supplement(
-                scored, covered, config.PGS_DIR / f"{pid}_1kg")
+                scored, covered, config.PGS_DIR / f"{pid}_1kg",
+                _multi_record_sites(_called_vcf(sample)))
             score += supp
             if n_supp:
                 log.info("  %s: +%.4f from %d reference-effect allele(s) the "
@@ -893,7 +1110,6 @@ def _score_entry(sample: str, entry: dict, gt_vcfs, out_dir: Path) -> dict:
         return {**entry, "trait": trait, "pid": pid, "method": "plink2", "raw": score,
                 "used": used + n_supp, "total": total, "pe": pe, "pa": pa}
     else:
-        score, n_used, _n_carry, contrib = _score_one(gt_vcfs, variants)
         try:
             # _autosomal, matching the plink2 path above: a scoring file with an
             # alt/patch-contig variant (PGS000018 carries one on chr17_KI270857v1_alt)
@@ -904,6 +1120,9 @@ def _score_entry(sample: str, entry: dict, gt_vcfs, out_dir: Path) -> dict:
         except Exception as e:  # noqa: BLE001 — calibration is best-effort
             log.warning("  calibration unavailable for %s (%s)", pid, e)
             freqs = {}
+        # Scored after the lookup: the 1000G records also settle which allele of an indel
+        # row is REF. Without them those rows are skipped and show in the used count.
+        score, n_used, _n_carry, contrib = _score_one(gt_vcfs, variants, freqs)
         pe, pa, _nc = _calibrate(contrib, variants, freqs) if freqs else (None, None, 0)
         log.info("  %-32s %s  raw=%.4f  EUR %%ile=%s (%d/%d variants)", trait, pid, score,
                  f"{pe:.1f}" if pe is not None else "n/a", n_used, len(variants))

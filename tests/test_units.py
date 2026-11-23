@@ -1229,12 +1229,11 @@ def test_segregation_indel_matching() -> None:
     check("insertion does NOT match a deletion at the same position",
           not sg._same_event(ins, "ATG", "A"))
 
-    # delins: VCF ATT>AG at p is VEP TT>G at p+1 — used to take the exact-match branch,
-    # which can never match the anchored form, so these were silently dropped.
-    check("delins matches its anchored VCF form",
-          sg._same_event({"ref": "TT", "alt": "G"}, "ATT", "AG"))
+    # delins: `bcftools norm` trims ATT>AG to TT>G, which VEP then leaves as it is.
+    check("delins matches its normalized VCF form",
+          sg._same_event({"ref": "TT", "alt": "G"}, "TT", "G"))
     check("delins does NOT match a different delins",
-          not sg._same_event({"ref": "TT", "alt": "G"}, "ATT", "AC"))
+          not sg._same_event({"ref": "TT", "alt": "G"}, "TT", "C"))
 
     check("case differences don't defeat the match",
           sg._same_event({"ref": "t", "alt": "-"}, "at", "A"))

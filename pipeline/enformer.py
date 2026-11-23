@@ -28,6 +28,8 @@ from . import config
 _table: dict | None = None
 # Calibration null: {"snv": [sorted Δmax], "indel": [sorted Δmax], ...} or {} if uncalibrated.
 _calibration: dict | None = None
+# Smallest stratum on which a 99th-percentile cut-off means anything.
+MIN_NULL = 100
 
 
 def is_snv(ref: str, alt: str) -> bool:
@@ -90,6 +92,20 @@ def _load_calibration() -> dict:
     return _calibration
 
 
+def null_shortfall(n_selected: int, snv: list, indel: list) -> str | None:
+    """Why this null must not be published, or None if it may. Every selected variant must
+    have a score, and each stratum must be large enough to resolve the 99th-percentile band:
+    against a 3-variant null about a quarter of benign variants grade `high`, and against an
+    empty one every variant of that kind silently grades `low`."""
+    missing = n_selected - len(snv) - len(indel)
+    if missing > 0:
+        return f"{missing} of {n_selected} selected variants have no score"
+    floor = max(1, min(config.INTERPRET_CALIBRATION_N, MIN_NULL))
+    if len(snv) < floor or len(indel) < floor:
+        return f"null too small ({len(snv)} SNV, {len(indel)} indel; need {floor} of each)"
+    return None
+
+
 def percentile(delta_max: float, ref: str, alt: str):
     """Δmax as a percentile (0–100) against the benign null for this variant's stratum, or
     None if uncalibrated / the stratum is empty. The fraction of common (≈benign) variants of
@@ -122,11 +138,15 @@ def is_regulatory_hit(en, ref: str, alt: str) -> bool:
 
 def label(en, ref: str = "", alt: str = "") -> str:
     """Human-readable cell, e.g. 'Δ6.98 p99.7 high (CAGE)' or '—'. Includes the percentile
-    when calibrated; the top track's assay description names *what* regulatory signal moved."""
+    when calibrated; the top track's assay description names *what* regulatory signal moved.
+    A scored variant needs its alleles: without them it would be graded against the wrong
+    (indel) null."""
     if not en:
         return "—"
+    if not (ref and alt):
+        raise ValueError("enformer.label needs ref and alt to choose the SNV or indel null")
     delta, _l2, track, desc = en
     assay = desc if config.INTERPRET_MODEL == "alphagenome2" else (desc.split(":")[0] if desc else f"track {track}")
-    pct = percentile(delta, ref, alt) if (ref or alt) else None
+    pct = percentile(delta, ref, alt)
     pct_s = f" p{pct:.1f}" if pct is not None else ""
     return f"Δ{delta:.2f}{pct_s} {band(delta, ref, alt)} ({assay})"

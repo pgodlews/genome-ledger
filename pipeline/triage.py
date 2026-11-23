@@ -81,8 +81,11 @@ def model_lookups(chrom, pos, ref, alt, consequence, have_am, have_sa, have_en):
     # evidence sets, for the same variant, in the same report.
     am = (alphamissense.lookup(chrom, pos, ref, alt)
           if have_am and _am_applicable(terms) else None)
+    # A missense can also create a cryptic splice site, and ACMG grades PP3 on SpliceAI for it
+    # (acmg._INSILICO). Gating on "splice" alone left triage and the provenance table without
+    # the very evidence that ACMG call rested on.
     sa = (spliceai.lookup(chrom, pos, ref, alt)
-          if have_sa and "splice" in terms else None)
+          if have_sa and ("splice" in terms or _am_applicable(terms)) else None)
     en = (enformer.lookup(chrom, pos, ref, alt)
           if have_en and _noncoding(consequence) else None)
     return am, sa, en

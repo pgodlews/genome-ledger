@@ -28,6 +28,48 @@ def _called_vcf(sample: str) -> Path:
     return sample_vcf(sample)
 
 
+def _merge_records(records: list[tuple[str, str, str]]) -> tuple[str, str, str]:
+    """One (REF, ALT, GT) for all the records a VCF holds at one POS.
+
+    `bcftools norm -m -both` turns a 1/2 genotype into two records (1/0 and 0/1), and a caller
+    can emit a SNV and an indel at one anchor. Reading either record alone loses the other
+    allele, so they are put back together in multiallelic form on the longest REF. A site that
+    cannot be combined (a no-call in any record, or more ALT copies than chromosomes) comes
+    back as a no-call: it is unresolved, and callers already keep those out of a result.
+    """
+    records = list(dict.fromkeys(records))   # a repeated record is one call, not two copies
+    if len(records) == 1:
+        return records[0]
+    ref = max((r for r, _a, _g in records), key=len)
+    nocall = (ref, ",".join(a for _r, a, _g in records), "./.")
+    alts: list[str] = []
+    slots: list[int] | None = None
+    for r, alt, gt in records:
+        fields = re.split(r"[/|]", gt)
+        if slots is None:
+            slots = [0] * len(fields)
+        if (not ref.startswith(r) or len(fields) != len(slots)
+                or any(g in (".", "") for g in fields)):
+            return nocall
+        coding = [r, *alt.split(",")]
+        for j, g in enumerate(fields):
+            try:
+                allele = coding[int(g)]
+            except (ValueError, IndexError):
+                return nocall
+            if int(g) == 0:
+                continue
+            # Re-express on the longest REF; a symbolic allele has no sequence to extend.
+            full = allele if allele == "*" or allele.startswith("<") else allele + ref[len(r):]
+            if full not in alts:
+                alts.append(full)
+            free = j if slots[j] == 0 else next((k for k, s in enumerate(slots) if s == 0), None)
+            if free is None:
+                return nocall
+            slots[free] = alts.index(full) + 1
+    return ref, ",".join(alts) or ".", "/".join(str(s) for s in slots)
+
+
 def _alleles_at(vcf: Path, chrom: str, pos: str, ref: str) -> tuple[str, str] | None:
     """The sample's two alleles at chrom:pos, or None on an explicit no-call. GATK emits
     only variant sites, so an absent position means homozygous reference — but a record
@@ -58,26 +100,32 @@ def _alleles_at(vcf: Path, chrom: str, pos: str, ref: str) -> tuple[str, str] | 
             capture_output=True, text=True)
         if proc2.returncode == 0 and proc2.stdout.strip():
             out = proc2.stdout.strip()
+    records = []
     for line in out.splitlines():
         f = line.split("\t")
         if len(f) < 4:   # malformed/truncated bcftools output line — skip, don't crash
             continue
         p, vref, valt, gt = f[:4]
-        if p != pos:
-            continue
-        idx = re.split(r"[/|]", gt)
-        if any(g in (".", "") for g in idx):
-            return None  # explicit (partial) no-call — not evidence of hom-ref
-        coding = [vref, *valt.split(",")]
-        try:
-            alleles = [coding[int(g)] for g in idx]
-        except (ValueError, IndexError):
-            return None  # malformed record (e.g. '*' allele w/o matching ALT) — don't guess
-        if len(alleles) >= 2:
-            return alleles[0], alleles[1]
-        if alleles:  # haploid (not expected for autosomal traits)
-            return alleles[0], alleles[0]
-    return ref, ref  # absent → hom-ref
+        if p == pos:
+            records.append((vref, valt, gt))
+    if not records:
+        return ref, ref  # absent → hom-ref
+    # Every record at this POS counts: `normalize` splits a 1/2 site into two, and the first
+    # alone hid the other allele.
+    vref, valt, gt = _merge_records(records)
+    idx = re.split(r"[/|]", gt)
+    if any(g in (".", "") for g in idx):
+        return None  # explicit (partial) no-call — not evidence of hom-ref
+    coding = [vref, *valt.split(",")]
+    try:
+        # The markers are single bases, so read the base AT this position: a deletion anchored
+        # here leaves it unchanged, and its whole allele string would not match the marker.
+        alleles = [coding[int(g)][0] for g in idx]
+    except (ValueError, IndexError):
+        return None  # malformed record (e.g. '*' allele w/o matching ALT) — don't guess
+    if len(alleles) >= 2:
+        return alleles[0], alleles[1]
+    return alleles[0], alleles[0]  # haploid (not expected for autosomal traits)
 
 
 def traits_report(sample: str, force: bool = False) -> Path:

@@ -70,6 +70,7 @@ def set_genomes_root(root: Path | str) -> None:
     global DENOVO_DIR, SEGREGATION_DIR
     global PHASE_DIR, SHARE_DIR, FORCECALL_DIR, FC_SITES_DIR, INTERPRET_DIR, GATK_DIR, GATK_BIN, GATK_JAR
     global VEP_DIR, HAPLOGREP_DIR, EXPANSIONHUNTER_DIR, MOSDEPTH_DIR, PHARMCAT_DIR
+    global VEP_BIN, HAPLOGREP_JAR, PHARMCAT_JAR, PHARMCAT_PIPELINE, KG_PANEL_FILE
     global CYRIUS_DIR, PGS_DIR, PLINK2_DIR, LIFTOVER_DIR
     global REF_FASTA, HG38_CHR_FASTA, HG19TOHG38_CHAIN
     global ALPHAMISSENSE_FILE, GNOMAD_CONSTRAINT_FILE, SPLICEAI_SNV_FILE, SPLICEAI_INDEL_FILE
@@ -129,12 +130,17 @@ def set_genomes_root(root: Path | str) -> None:
     GATK_BIN = GATK_DIR / "gatk"
     GATK_JAR = GATK_DIR / f"gatk-package-{GATK_VERSION}-local.jar"
     VEP_DIR = GENOMES_ROOT / "tools" / "ensembl-vep"
+    VEP_BIN = VEP_DIR / "vep"
     HAPLOGREP_DIR = GENOMES_ROOT / "tools" / "haplogrep"
+    HAPLOGREP_JAR = HAPLOGREP_DIR / "haplogrep3.jar"
     EXPANSIONHUNTER_DIR = GENOMES_ROOT / "tools" / "expansionhunter"
     MOSDEPTH_DIR = GENOMES_ROOT / "tools" / "mosdepth"
     PHARMCAT_DIR = GENOMES_ROOT / "tools" / "pharmcat"
+    PHARMCAT_JAR = PHARMCAT_DIR / f"pharmcat-{PHARMCAT_VERSION}-all.jar"
+    PHARMCAT_PIPELINE = PHARMCAT_DIR / "preprocessor" / "pharmcat_pipeline"
     CYRIUS_DIR = GENOMES_ROOT / "tools" / "Cyrius"
     PGS_DIR = GENOMES_ROOT / "tools" / "pgs"
+    KG_PANEL_FILE = PGS_DIR / "1kg_3202_population.txt"
     PLINK2_DIR = GENOMES_ROOT / "tools" / "plink2"
     LIFTOVER_DIR = GENOMES_ROOT / "refs" / "liftover"
 

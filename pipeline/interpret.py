@@ -184,8 +184,10 @@ def _run_remote(job_path: Path, out_path: Path) -> None:
     run(["ssh", host, f"mkdir -p {rdir} {cache}/hf"])
     run(["scp", "-q", str(job_path), f"{host}:{rjob}"])
     # Best-effort: ensure the model's track-description file is in the cache for human labels.
-    run(["ssh", host, f"test -f {targets} || curl -fsSL -o {targets} "
-         f"{config.ENFORMER_TARGETS_URL} || true"])
+    # Via a temp file: `test -f` would keep a truncated download forever.
+    run(["ssh", host, f"test -f {targets} || {{ curl -fsSL -o {targets}.part "
+         f"{config.ENFORMER_TARGETS_URL} && mv -f {targets}.part {targets}; }} "
+         f"|| {{ rm -f {targets}.part; true; }}"])
     docker = (
         f"docker run --rm --gpus all "
         f"-v {cache}:/cache -v {rdir}:/jobs "
@@ -370,10 +372,15 @@ def calibrate(snapshot: str, force: bool = False, *, dry_run: bool = False) -> P
 
     snv = sorted(d["delta_max"] for d in fresh if enformer_mod.is_snv(d["ref"], d["alt"]))
     indel = sorted(d["delta_max"] for d in fresh if not enformer_mod.is_snv(d["ref"], d["alt"]))
+    problem = enformer_mod.null_shortfall(len(placed), snv, indel)
+    if problem:
+        raise SystemExit(f"interpret calibrate: not updated: {problem}. "
+                         "Any existing null is unchanged.")
     data = {"model": config.INTERPRET_MODEL_HF,
             "af_threshold": config.INTERPRET_COMMON_AF,
             "n_snv": len(snv), "n_indel": len(indel), "snv": snv, "indel": indel}
-    config.ENFORMER_CALIBRATION_FILE.write_text(json.dumps(data))
+    from .alphagenome_client import _atomic       # temp + rename: never a half-written null
+    _atomic(config.ENFORMER_CALIBRATION_FILE, json.dumps(data))
     enformer_mod._calibration = None              # invalidate the lazy cache
     log.info("interpret calibrate: null built — %d SNV + %d indel (AF≥%.2g) → %s",
              len(snv), len(indel), config.INTERPRET_COMMON_AF,

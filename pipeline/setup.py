@@ -113,8 +113,16 @@ def setup() -> None:
     _download(config.REF_FASTA_URL, fa_gz, f"{config.BUILD} reference FASTA")
     if not config.REF_FASTA.exists():
         log.info("Decompressing reference FASTA …")
-        with gzip.open(fa_gz, "rb") as fi, open(config.REF_FASTA, "wb") as fo:
-            shutil.copyfileobj(fi, fo, length=1 << 24)
+        # Into a .part file: the exists() check above would otherwise accept a half-written
+        # reference after an interrupted run, and every later stage would use it.
+        part = config.REF_FASTA.with_name(config.REF_FASTA.name + ".part")
+        try:
+            with gzip.open(fa_gz, "rb") as fi, open(part, "wb") as fo:
+                shutil.copyfileobj(fi, fo, length=1 << 24)
+            part.replace(config.REF_FASTA)
+        except BaseException:
+            part.unlink(missing_ok=True)
+            raise
     if not config.REF_FASTA.with_suffix(".fa.fai").exists():
         run(["samtools", "faidx", str(config.REF_FASTA)])
 
@@ -229,20 +237,31 @@ def _install_alphamissense() -> None:
     """Download AlphaMissense (deep missense pathogenicity) and re-compress as bgzip +
     tabix so reports can point-query it. ~1GB download, ~5GB intermediate; optional —
     reports degrade gracefully without it."""
-    if config.ALPHAMISSENSE_FILE.exists():
+    final = config.ALPHAMISSENSE_FILE
+    final_tbi = final.with_name(final.name + ".tbi")
+    if final.exists() and final_tbi.exists():   # the index is written last
         log.info("AlphaMissense already installed — skipping.")
         return
     require_tools("bgzip", "tabix")
     raw = config.REFS_DIR / "AlphaMissense_hg38.tsv.gz"
     _download(config.ALPHAMISSENSE_URL, raw, "AlphaMissense GRCh38 (~1GB)")
     log.info("Re-compressing AlphaMissense as bgzip + tabix (slow) …")
-    with open(config.ALPHAMISSENSE_FILE, "wb") as out:
-        gz = subprocess.Popen(["gzip", "-dc", str(raw)], stdout=subprocess.PIPE)
-        bg = subprocess.Popen(["bgzip", "-c"], stdin=gz.stdout, stdout=out)
-        gz.stdout.close()
-        if bg.wait() or gz.wait():
-            raise SystemExit("AlphaMissense bgzip failed")
-    run(["tabix", "-s", "1", "-b", "2", "-e", "2", str(config.ALPHAMISSENSE_FILE)])
+    part = final.with_name(final.name + ".part")
+    part_tbi = part.with_name(part.name + ".tbi")
+    try:
+        with open(part, "wb") as out:
+            gz = subprocess.Popen(["gzip", "-dc", str(raw)], stdout=subprocess.PIPE)
+            bg = subprocess.Popen(["bgzip", "-c"], stdin=gz.stdout, stdout=out)
+            gz.stdout.close()
+            if bg.wait() or gz.wait():
+                raise SystemExit("AlphaMissense bgzip failed")
+        run(["tabix", "-f", "-s", "1", "-b", "2", "-e", "2", str(part)])
+        part.replace(final)
+        part_tbi.replace(final_tbi)
+    except BaseException:
+        part.unlink(missing_ok=True)
+        part_tbi.unlink(missing_ok=True)
+        raise
     raw.unlink(missing_ok=True)
     log.info("AlphaMissense ready: %s", config.ALPHAMISSENSE_FILE)
 

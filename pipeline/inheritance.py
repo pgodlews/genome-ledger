@@ -65,6 +65,19 @@ def loaded(snap: str) -> bool:
         con.close()
 
 
+def snapshot_callsets(snap: str) -> set[str]:
+    """The callsets this snapshot actually holds rows for.
+
+    samples.tsv says who has been ingested by now, so an older snapshot read through it counts
+    a parent added later as sequenced, and their missing rows as "does not carry it"."""
+    con = connect()
+    try:
+        return {r[0] for r in con.execute(
+            f"SELECT DISTINCT sample_id FROM {TABLE} WHERE snapshot_id = ?", [snap]).fetchall()}
+    finally:
+        con.close()
+
+
 def _rows(con, snap: str):
     """Every actionable-significance call in the snapshot, one row per (callset, variant)."""
     return con.execute(f"""
@@ -111,8 +124,11 @@ def collect(snap: str, fam) -> list[dict]:
         })
         person = fam.person_of(sid)
         z = (zyg or "").upper()
+        # On MT only the primary callset is read (is_alternate_mt above), so alternates that
+        # were dropped there did not disagree with it.
+        n_callsets = 1 if sexchrom.contig(chrom) == "MT" else scanned[person]
         c = v["carriers"].setdefault(person, {"zyg": z, "callsets": {}, "low_ab": None,
-                                              "n_callsets": scanned[person]})
+                                              "n_callsets": n_callsets})
         c["callsets"][sid] = z
         frac = ab.get(sid, {}).get(key)
         if allele_balance.is_low(z, frac) and (
@@ -574,7 +590,6 @@ def build_page(snap: str | None = None, out_dir: Path | None = None) -> Path:
     from .render import (_SHELL_STYLE, _STYLE, _attr, _esc, _inline, perspective_control,
                          perspective_script, snapshot_switcher)
 
-    fam = pedigree.load(sequenced=pedigree.sequenced_ids())
     snap = snap or latest_snapshot()
     if not snap:
         raise SystemExit("No snapshot yet. Run `snapshot` first.")
@@ -583,6 +598,7 @@ def build_page(snap: str | None = None, out_dir: Path | None = None) -> Path:
             f"No variant rows for snapshot {snap} in {config.DUCKDB_FILE.name} — this "
             "page is built from the database, not from the markdown reports beside it. "
             "Build it on the machine that ran the scan, or load that snapshot here first.")
+    fam = pedigree.load(sequenced=snapshot_callsets(snap))
     out_dir = out_dir or (reportpaths.html_root() / snap)
     out_dir.mkdir(parents=True, exist_ok=True)
     out = out_dir / "inheritance.html"

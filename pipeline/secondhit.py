@@ -39,6 +39,11 @@ def parental_phase(snapshot, candidate):
     if not trio:
         return 'unknown'
     con = connect()
+    def in_snapshot(pid):
+        ids = fam.callsets(pid)
+        return bool(ids) and bool(con.execute(
+            f"SELECT 1 FROM variants WHERE snapshot_id=? AND sample_id IN ({','.join('?' * len(ids))}) "
+            "LIMIT 1", [snapshot,*ids]).fetchone())
     def origin(v):
         carriers = {fam.person_of(r[0]) for r in con.execute(
             "SELECT DISTINCT sample_id FROM variants WHERE snapshot_id=? AND chrom=? AND pos=? "
@@ -46,6 +51,10 @@ def parental_phase(snapshot, candidate):
         parents = set(trio[1:]) & carriers
         return next(iter(parents)) if len(parents) == 1 else None
     try:
+        # A parent with no callset here cannot testify: carrying both variants in the other
+        # parent would otherwise read as cis.
+        if not all(in_snapshot(p) for p in trio[1:]):
+            return 'unknown'
         a,b=origin(candidate),origin(candidate['known'])
         return ('trans (parental-origin candidate)' if a != b else 'cis (parental-origin candidate)') if a and b else 'unknown'
     finally:
@@ -68,7 +77,9 @@ def second_hit(snapshot, *, dry_run=False, phase=False):
         v['phase'] = parental_phase(snapshot,v)
         if phase:
             from .phasing import phase_pair
-            v['phase'] = phase_pair(v['sample'],v['gene'],v['known'],v)
+            read_backed = phase_pair(v['sample'],v['gene'],v['known'],v)
+            if read_backed != 'unknown':   # no read evidence is not evidence against the origin
+                v['phase'] = read_backed
         rows=ag.evidence(*ag.key(v),v['gene'])
         expr=ag.summary([r for r in rows if r['scorer']=='RNA_SEQ'],v['gene'])
         v['expression']=expr[0] if expr else None

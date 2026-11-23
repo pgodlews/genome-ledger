@@ -79,11 +79,21 @@ def conditions_for(gene):
                      'rationale': 'No panel mapping; reference fallback, not disease-specific.'}]
 
 
+# Report lookups consult the epoch once per variant, so parsing it each time meant a file read
+# per row of a whole genome. Re-read only when the file changes; it is replaced atomically.
+_epoch_cache = {'sig': None, 'data': {}}
+
+
 def epoch():
+    path = config.ALPHAGENOME_EPOCH_FILE
     try:
-        return json.loads(config.ALPHAGENOME_EPOCH_FILE.read_text())
+        st = path.stat()
+        sig = (str(path), st.st_ino, st.st_mtime_ns, st.st_size)
+        if _epoch_cache['sig'] != sig:
+            _epoch_cache.update(sig=sig, data=json.loads(path.read_text()))
     except FileNotFoundError:
         return {}
+    return _epoch_cache['data']
 
 
 # The long table reaches ~1,100 rows per scored variant (CHIP_TF alone is ~900), so a family
@@ -130,7 +140,7 @@ def evidence(chrom, pos, ref, alt, gene=None):
     target = (str(chrom).removeprefix('chr'), int(pos), ref, alt)
     current_rows()
     rows = list(_cache['by_key'].get(target, []))
-    if gene:
+    if gene and rows:  # most variants have no rows: do not read the tissue table for them
         condition = conditions_for(gene)[0]['condition']
         rows = [r for r in rows if r['condition'] == condition]
     return rows
@@ -140,8 +150,6 @@ def splice_label(chrom, pos, ref, alt, gene, consequence):
     from . import spliceai
     if not any(c in (consequence or '') for c in ('splice', 'intron')):
         return '—'
-    if spliceai.lookup(chrom, pos, ref, alt):
-        return '—'
     rows = evidence(chrom, pos, ref, alt, gene)
     labels = []
     for scorer in SCORERS[-3:]:
@@ -149,8 +157,12 @@ def splice_label(chrom, pos, ref, alt, gene, consequence):
                 and r['gene'] in ('', gene) and math.isfinite(float(r['raw_score']))]
         if vals:
             labels.append(f'{scorer} {max(vals):.3g}')
+    # SpliceAI is a tabix subprocess, and this runs on every intronic variant of a genome:
+    # ask it only when there is an AlphaGenome label for it to supersede.
+    if not labels or spliceai.lookup(chrom, pos, ref, alt):
+        return '—'
     return ('; '.join(labels) + ' (model prediction, unvalidated; ' +
-            conditions_for(gene)[0]['label'] + ')') if labels else '—'
+            conditions_for(gene)[0]['label'] + ')')
 
 
 def _create_client(api_key):
@@ -212,7 +224,10 @@ class Session:
                 return self.client.score({k: v[k] for k in ('chrom','pos','ref','alt','ref_seq','alt_seq')
                                           if k in v}, condition)
             except Exception as exc:
-                code = str(exc.code()) if hasattr(exc, 'code') else type(exc).__name__
+                # gRPC errors expose code() as a method; urllib's HTTPError an int attribute.
+                attr = getattr(exc, 'code', None)
+                code = (type(exc).__name__ if attr is None
+                        else str(attr() if callable(attr) else attr))
                 if code.rsplit('.', 1)[-1] not in ('RESOURCE_EXHAUSTED', 'UNAVAILABLE', 'DEADLINE_EXCEEDED'):
                     # Never print raw RPC errors: metadata may contain credentials.
                     raise Stopped(f'AlphaGenome request failed ({code}); cached results retained.') from None
@@ -339,9 +354,11 @@ def eligible(snapshot, variants, *, panel_only=None):
     return allowed, withheld
 
 
-def score_selected(snapshot, variants, *, dry_run=False, panel_only=None):
+def score_selected(snapshot, variants, *, dry_run=False, panel_only=None, raise_stopped=False):
     # The calibration null is common variants genome-wide; a panel filter would leave almost
-    # none of them, so run_snapshot passes panel_only=False for --calibrate.
+    # none of them, so run_snapshot passes panel_only=False for --calibrate. It also passes
+    # raise_stopped: scores so far are kept either way, but a partial run is not a null.
+    stopped = None
     if panel_only is None:
         panel_only = config.ALPHAGENOME_PANEL_ONLY
     allowed, withheld = eligible(snapshot, variants, panel_only=panel_only)
@@ -376,7 +393,10 @@ def score_selected(snapshot, variants, *, dry_run=False, panel_only=None):
                 completed.add((*key(v), c['condition']))
     except Stopped as exc:
         log.warning('%s', exc)
+        stopped = exc
     rebuild_summary(allowed)
+    if stopped and raise_stopped:
+        raise stopped
     return allowed, withheld
 
 
@@ -407,8 +427,13 @@ def run_snapshot(snapshot, *, calibrate=False, dry_run=False, force=False):
     config.INTERPRET_DIR.mkdir(parents=True, exist_ok=True)
     with (config.INTERPRET_DIR / 'alphagenome2.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        allowed, withheld = score_selected(snapshot, variants, dry_run=dry_run,
-                                           panel_only=False if calibrate else None)
+        try:
+            allowed, withheld = score_selected(snapshot, variants, dry_run=dry_run,
+                                               panel_only=False if calibrate else None,
+                                               raise_stopped=calibrate)
+        except Stopped as exc:
+            raise SystemExit(f'AlphaGenome calibration not updated: {exc} Scores so far are '
+                             'kept; any existing null is unchanged.') from None
         if dry_run:
             return config.INTERPRET_DIR
         scored = []
@@ -423,6 +448,10 @@ def run_snapshot(snapshot, *, calibrate=False, dry_run=False, force=False):
                 data[stratum] = sorted(v['delta_max'] for v in scored
                     if enformer.is_snv(v['ref'],v['alt']) == snv)
                 data['n_'+stratum] = len(data[stratum])
+            problem = enformer.null_shortfall(len(allowed), data['snv'], data['indel'])
+            if problem:
+                raise SystemExit(f'AlphaGenome calibration not updated: {problem}. '
+                                 'Any existing null is unchanged.')
             _atomic(config.ENFORMER_CALIBRATION_FILE, json.dumps(data))
             enformer._calibration = None
             return config.ENFORMER_CALIBRATION_FILE

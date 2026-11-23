@@ -31,9 +31,22 @@ from .util import log, require_tools, run, write_report
 # Ensembl (1, MT) → UCSC (chr1, chrM) for PharmCAT's chr-prefixed reference.
 _ENS2CHR = {**{str(i): f"chr{i}" for i in range(1, 23)},
             "X": "chrX", "Y": "chrY", "MT": "chrM"}
-# Phenotype substrings that are NOT actionable (used to flag the rest).
-_NORMAL_HINTS = ("normal", "indeterminate", "no result", "n/a", "—", "favorable",
-                 "reference", "non-responsive")
+# Whole phenotype values that are NOT actionable, lower-cased. Everything else is flagged, so a
+# value PharmCAT adds later is shown rather than hidden. Exact on purpose: substring hints read
+# "Unfavorable response allele" as containing "favorable" and dropped it from the table.
+_NOT_ACTIONABLE = frozenset({
+    "normal", "normal metabolizer", "normal function",
+    "normal risk of aminoglycoside-induced hearing loss", "normal coumarin sensitivity",
+    "favorable response allele", "favorable response genotype",
+    "ivacaftor non-responsive", "ivacaftor non-responsive in cf patients",
+    "factor v leiden negative", "prothrombin 20210a negative", "iv/normal",
+    "indeterminate", "no result", "n/a", "—",
+})
+
+
+def _is_actionable(phenotype: str) -> bool:
+    """True if any part of a '; '-joined phenotype is outside the non-actionable set."""
+    return any(p.strip().lower() not in _NOT_ACTIONABLE for p in phenotype.split("; "))
 
 
 def _with(specs) -> list[str]:
@@ -157,7 +170,7 @@ def _write_summary(sample: str, report_json: Path, out: Path,
             call, pheno = "(no call)", "—"
         rows.append((gene, call, pheno))
 
-    flagged = [r for r in rows if not any(h in r[2].lower() for h in _NORMAL_HINTS)]
+    flagged = [r for r in rows if _is_actionable(r[2])]
     flagged_md = [f"| {g} | {c} | {p} |" for g, c, p in flagged] or ["| _none_ | | |"]
     all_md = [f"| {g} | {c} | {p} |" for g, c, p in rows]
 

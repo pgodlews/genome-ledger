@@ -220,7 +220,7 @@ a.card:hover { border-color:var(--edge); }
   gap:.75rem; align-items:center; font-size:.9rem; }
 .prs .track { width:100%; } .prs b { font-family:var(--mono); font-weight:500;
   text-align:right; }
-.people a.card.me { border:2px solid var(--accent); background:var(--sel); }
+.people .card.ego { border:2px solid var(--accent); background:var(--sel); }
 .people .nm { display:flex; align-items:baseline; justify-content:space-between;
   font-family:var(--display); font-weight:600; font-size:1.6rem; letter-spacing:-.02em;
   margin:0 0 .9rem; }

@@ -80,8 +80,10 @@ def cram_header(lines: list[str], name: str) -> list[str]:
 
 def share(sample: str, kind: str = "vcf", name: str | None = None) -> Path:
     name = name or _person(sample)
-    if not re.fullmatch(r"[A-Za-z0-9._-]+", name):
-        raise SystemExit(f"Name '{name}' must be letters, digits, '.', '_' or '-'.")
+    # Must start alphanumeric: `.` and `..` would otherwise resolve outside SHARE_DIR/<name>.
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", name):
+        raise SystemExit(f"Name '{name}' must start with a letter or digit and contain only "
+                         "letters, digits, '.', '_' or '-'.")
     out_dir = config.SHARE_DIR / name
     out_dir.mkdir(parents=True, exist_ok=True)
 

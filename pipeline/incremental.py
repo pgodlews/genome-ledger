@@ -116,13 +116,14 @@ def _clinvar_select(path: Path) -> str:
     """Parse a ClinVar VCF's (chrom,pos,ref,alt) + the four CLINVAR INFO fields. Used identically
     on both snapshots' ClinVar, so change-detection is independent of how VEP formats the values
     — a difference here is a real ClinVar change."""
+    path_sql = str(path).replace("'", "''")  # a quote in the path must not break the SQL
     return f"""
         SELECT chrom, pos, ref, alt,
                regexp_extract(info, 'CLNSIG=([^;]*)', 1)      AS clnsig,
                regexp_extract(info, 'CLNREVSTAT=([^;]*)', 1)  AS clnrevstat,
                regexp_extract(info, 'CLNDN=([^;]*)', 1)       AS clndn,
                regexp_extract(info, 'ALLELEID=([^;]*)', 1)    AS alleleid
-        FROM read_csv('{path}', delim='\\t', header=false, comment='#', compression='gzip',
+        FROM read_csv('{path_sql}', delim='\\t', header=false, comment='#', compression='gzip',
                       auto_detect=false,
                       columns={{'chrom':'VARCHAR','pos':'BIGINT','id':'VARCHAR','ref':'VARCHAR',
                                 'alt':'VARCHAR','qual':'VARCHAR','filter':'VARCHAR',
@@ -228,7 +229,7 @@ def site_regions(keys: list[tuple]) -> list[tuple]:
     out = set()
     for chrom, pos, ref, alt in keys:
         out.add((chrom, pos))
-        if ref == "-" or alt == "-":
+        if (ref == "-" or alt == "-") and pos > 1:   # VCF positions start at 1
             out.add((chrom, pos - 1))
     return sorted(out)
 

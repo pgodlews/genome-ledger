@@ -64,7 +64,7 @@ flowchart TB
 
   subgraph caches["Caches — ~/genomes/tools"]
     C1["pgs/PGSxxxx_hmPOS_GRCh38.txt.gz"]
-    C2["pgs/PGSxxxx_1kg_af.tsv"]
+    C2["pgs/PGSxxxx_1kg_af.v2.tsv"]
     C3["pgs/PGSxxxx_1kg/scores_all.tsv<br/>+ per-chrom reference pgen"]
     C4["plink2/SAMPLE.pgen<br/>stamped on VCF identity"]
   end
@@ -199,7 +199,7 @@ family member scores in minutes.
 | Cache | Path | Keyed on | Invalidation | Shared across |
 |---|---|---|---|---|
 | Scoring file | `tools/pgs/PGSxxxx_hmPOS_GRCh38.txt.gz` | PGS id | manual delete | everyone |
-| 1000G allele freqs | `tools/pgs/PGSxxxx_1kg_af.tsv` | PGS id | manual delete; **never written partial** | everyone |
+| 1000G allele freqs | `tools/pgs/PGSxxxx_1kg_af.v2.tsv` | PGS id | manual delete; **never written partial** | everyone |
 | Reference pgen + scores | `tools/pgs/PGSxxxx_1kg/` | PGS id | manual delete; **never written partial** | whole family |
 | Sample pgen | `tools/plink2/SAMPLE.pgen` | `file_token(VCF)` + `_PGEN_RECIPE` | automatic — re-call or re-ingest rebuilds it | one sample |
 | Report | `reports/md/genome/PERSON/prs_SAMPLE.md` | panel digest + variant cap (`prs/SAMPLE/prs_SAMPLE.panel-stamp`) and S1 consent state (`.consent-stamp`) | automatic — a panel edit or a consent change re-scores it, on the next `prs` or the next `check-releases`; `--force` for anything else | one sample |

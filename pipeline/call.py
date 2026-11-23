@@ -421,8 +421,14 @@ def call(sample: str, force: bool = False) -> Path:
     parts: list[Path] = [None] * len(tasks)   # type: ignore[list-item]
     with ThreadPoolExecutor(max_workers=config.HC_WORKERS) as ex:
         futures = {ex.submit(_call_shard, tasks[i]): i for i in order}
-        for fut in as_completed(futures):
-            parts[futures[fut]] = fut.result()   # first failure surfaces here
+        try:
+            for fut in as_completed(futures):
+                parts[futures[fut]] = fut.result()   # first failure surfaces here
+        except BaseException:
+            # Leaving the `with` waits for the whole queue, so without this a failed shard
+            # would surface only after every remaining window had been called.
+            ex.shutdown(wait=False, cancel_futures=True)
+            raise
 
     raw = config.CALLED_DIR / f"{sample}.{config.BUILD}.raw.vcf.gz"
     log.info("Concatenating %d shard VCFs → %s", len(parts), raw.name)

@@ -39,6 +39,7 @@ from pathlib import Path
 
 from . import reportpaths
 from . import config, pedigree
+from .allele_balance import vep_key
 from .call import aligned_cram
 from .forcecall import _fai_lengths, call_at_sites
 from .normalize import normalized_path
@@ -360,7 +361,8 @@ def parent_verdict(gt: str, dp: int, alt_ad: int) -> tuple[str, str]:
 
     Pure. The three outcomes are deliberately asymmetric: only an *evidenced* hom-ref at
     adequate depth with no alt-read support supports a de-novo call; anything the reads
-    leave unresolved is INDETERMINATE, never a silent pass."""
+    leave unresolved is INDETERMINATE, never a silent pass. That includes a half-called
+    genotype: `0/.` is one observed copy and one unknown, not hom-ref."""
     if not gt or gt.replace("|", "/").split("/")[0] in (".", ""):
         return INDETERMINATE, "no-call"
     if dp < config.DN_MIN_PARENT_DP:
@@ -370,7 +372,83 @@ def parent_verdict(gt: str, dp: int, alt_ad: int) -> tuple[str, str]:
         return INHERITED, f"GT {gt}"
     if alt_ad > config.DN_MAX_PARENT_ALT:
         return INHERITED, f"{alt_ad} alt reads"
+    if "." in alleles:
+        return INDETERMINATE, f"partial no-call {gt}"
     return CONFIRMED, f"0/0 at {dp}x"
+
+
+def _minimal(pos: int, ref: str, alt: str) -> tuple[int, str, str]:
+    """One spelling of an allele, so a record's joint form compares equal to a candidate's.
+
+    HaplotypeCaller and mpileup write every ALT at a site against one shared REF, so the
+    deletion a normalized VCF holds as AT>A can come back as ATG>AG. Trims the shared suffix,
+    then the shared prefix, keeping at least one base on each side."""
+    ref, alt = ref.upper(), alt.upper()
+    while len(ref) > 1 and len(alt) > 1 and ref[-1] == alt[-1]:
+        ref, alt = ref[:-1], alt[:-1]
+    while len(ref) > 1 and len(alt) > 1 and ref[0] == alt[0]:
+        ref, alt, pos = ref[1:], alt[1:], pos + 1
+    return pos, ref, alt
+
+
+def _allele_index(pos: int, rec_ref: str, alts: list[str], want: tuple) -> int | None:
+    """1-based index of the wanted allele among a record's ALTs, or None."""
+    return next((i for i, a in enumerate(alts, 1) if _minimal(pos, rec_ref, a) == want), None)
+
+
+def _record_verdict(rec: tuple, pos: int, want: tuple) -> tuple[str, str]:
+    """`parent_verdict` for one allele of one force-called record.
+
+    A different ALT at the position is neither this allele nor evidence of hom-ref, so it is
+    INDETERMINATE: counting it as "carries" names a parent who never had the allele."""
+    rec_ref, alts, gt, dp, counts = rec
+    idx = _allele_index(pos, rec_ref, alts, want)
+    own = counts[idx] if idx is not None and idx < len(counts) else 0
+    other_reads = sum(counts[1:]) - own
+    called = gt.replace("|", "/").split("/")
+    other_called = any(a not in ("0", ".", "", str(idx)) for a in called)
+    projected = "/".join("1" if a == str(idx) else a if a in ("0", ".", "") else "."
+                         for a in called)
+    status, detail = parent_verdict(projected if gt else "", dp, own)
+    if status == INHERITED:
+        return status, detail.replace(f"GT {projected}", f"GT {gt}")
+    if other_called or other_reads > config.DN_MAX_PARENT_ALT:
+        return INDETERMINATE, f"a different allele at this position (GT {gt})"
+    return status, detail
+
+
+def parent_call(records: list | None, pos: int, ref: str, alt: str) -> tuple[str, str]:
+    """(status, detail) for one parent at one exact allele, from `_read_parent` records."""
+    if not records:
+        return parent_verdict("", 0, 0)
+    want = _minimal(pos, ref, alt)
+    verdicts = [_record_verdict(r, pos, want) for r in records]
+    for status in (INHERITED, INDETERMINATE):
+        for v in verdicts:
+            if v[0] == status:
+                return v
+    return verdicts[0]
+
+
+def with_pileup(verdict: tuple[str, str], records: list | None, pos: int, ref: str,
+                alt: str) -> tuple[str, str]:
+    """Apply the raw pileup to a force-call verdict, for this exact allele.
+
+    Enough reads of the allele itself mean the parent carries it, whatever HaplotypeCaller
+    said. Enough non-reference reads of anything else cannot support that claim, but they do
+    forbid an evidenced hom-ref, so a CONFIRMED absence drops to INDETERMINATE."""
+    want = _minimal(pos, ref, alt)
+    own = nonref = 0
+    for rec_ref, alts, counts in records or []:
+        nonref = max(nonref, sum(counts[1:]))
+        idx = _allele_index(pos, rec_ref, alts, want)
+        if idx is not None and idx < len(counts):
+            own = max(own, counts[idx])
+    if own >= config.DN_PILEUP_MIN_ALT:
+        return INHERITED, f"{own} reads of this allele (pileup)"
+    if nonref >= config.DN_PILEUP_MIN_ALT and verdict[0] == CONFIRMED:
+        return INDETERMINATE, f"{nonref} non-ref reads, not this allele (pileup)"
+    return verdict
 
 
 def _force_call_parent(parent: str, vcf_sites: Path, intervals: Path, key: str,
@@ -389,26 +467,28 @@ def _force_call_parent(parent: str, vcf_sites: Path, intervals: Path, key: str,
     return call_at_sites(parent, cram, vcf_sites, intervals, out, key, tag="denovo")
 
 
-def _read_parent(vcf: Path) -> dict[tuple[str, int], tuple[str, int, int]]:
-    """(chrom, pos) → (GT, DP, alt-supporting AD) from a force-called parental VCF."""
+def _read_parent(vcf: Path) -> dict[tuple[str, int], list[tuple]]:
+    """(chrom, pos) → [(REF, [ALT…], GT, DP, per-allele AD)] from a force-called parental VCF.
+
+    Kept per allele because one site can hold several ALTs; `parent_call` reads the one a
+    candidate asks about."""
     out = subprocess.run(
-        ["bcftools", "query", "-f", "%CHROM\t%POS[\t%GT\t%DP\t%AD]\n", str(vcf)],
+        ["bcftools", "query", "-f", "%CHROM\t%POS\t%REF\t%ALT[\t%GT\t%DP\t%AD]\n", str(vcf)],
         capture_output=True, text=True, check=True).stdout
-    geno: dict[tuple[str, int], tuple[str, int, int]] = {}
+    geno: dict[tuple[str, int], list[tuple]] = {}
     for line in out.splitlines():
         f = line.split("\t")
-        if len(f) < 5:
+        if len(f) < 7:
             continue
-        chrom, pos, gt, dp, ad = f[:5]
-        counts = _ad_counts(ad)
-        geno[(chrom, int(pos))] = (gt, int(dp) if dp.isdigit() else 0,
-                                   sum(counts[1:]) if len(counts) > 1 else 0)
+        chrom, pos, ref, alt, gt, dp, ad = f[:7]
+        geno.setdefault((chrom, int(pos)), []).append(
+            (ref, alt.split(","), gt, int(dp) if dp.isdigit() else 0, _ad_counts(ad)))
     return geno
 
 
 def _pileup_parent(parent: str, regions: Path, key: str, wd: Path,
-                   force: bool = False) -> dict[tuple[str, int], int]:
-    """(chrom, pos) → non-reference read count in the parent's CRAM, from a RAW pileup.
+                   force: bool = False) -> dict[tuple[str, int], list[tuple]]:
+    """(chrom, pos) → [(REF, [ALT…], per-allele AD)] in the parent's CRAM, from a RAW pileup.
 
     Deliberately caller-independent. The force-call pass asks HaplotypeCaller whether the
     parent carries the allele — but at exactly the sites that reach this stage (found by the
@@ -416,16 +496,18 @@ def _pileup_parent(parent: str, regions: Path, key: str, wd: Path,
     that failed, and it answers `0/0` at full depth with complete confidence. A pileup has no
     assembly and no genotype model: it reports the bases the reads actually carry.
 
-    Counts *any* non-reference support (bcftools' `<*>` allele included), so a parent showing
-    a different alt at the position also blocks the de-novo call. Conservative in the only
-    direction that is safe here.
+    mpileup writes a SNP record and, where gapped reads exist, an INDEL record at the same
+    POS, so every record is kept: one overwriting the other hid real alt reads. `with_pileup`
+    reads them per allele, and *any* other non-reference support (bcftools' `<*>` allele
+    included) still blocks a de-novo call, as indeterminate rather than as inherited.
 
     Cached under the candidate-set `key`, exactly like the force-call output beside it. That
     is not tidiness: `confirm` treats a site missing from this dict as "no pileup opinion" and
     falls back to HaplotypeCaller's verdict alone, so a pileup keyed only by parent name would
     — after any change to the candidate set — silently stop covering the new candidates while
     appearing to work. The check would go missing precisely where it was needed."""
-    out = _keyed_path(wd, f"{parent}.pileup", key, ".tsv")
+    # "alleles" in the key: older cache files hold AD alone and cannot be read per allele.
+    out = _keyed_path(wd, f"{parent}.pileup", _key(key, "alleles"), ".tsv")
     if not out.exists() or force:
         cmd = ["bcftools", "mpileup", "-f", str(config.REF_FASTA), "-R", str(regions),
                "-a", "AD", "-d", "200", "-q", str(config.DN_PILEUP_MIN_MQ),
@@ -439,7 +521,8 @@ def _pileup_parent(parent: str, regions: Path, key: str, wd: Path,
             with open(tmp, "wb") as fh, open(errlog, "wb") as lf:
                 mp = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=lf)
                 try:
-                    subprocess.run(["bcftools", "query", "-f", "%CHROM\t%POS\t[%AD]\n"],
+                    subprocess.run(["bcftools", "query", "-f",
+                                    "%CHROM\t%POS\t%REF\t%ALT\t[%AD]\n"],
                                    stdin=mp.stdout, stdout=fh, check=True)
                 finally:
                     # Always reached, so mpileup is reaped even when query raises (it takes
@@ -453,13 +536,12 @@ def _pileup_parent(parent: str, regions: Path, key: str, wd: Path,
             tmp.replace(out)
         finally:
             tmp.unlink(missing_ok=True)
-    geno: dict[tuple[str, int], int] = {}
+    geno: dict[tuple[str, int], list[tuple]] = {}
     for line in out.read_text().splitlines():
         f = line.split("\t")
-        if len(f) < 3:
+        if len(f) < 5:
             continue
-        counts = _ad_counts(f[2])
-        geno[(f[0], int(f[1]))] = sum(counts[1:]) if len(counts) > 1 else 0
+        geno.setdefault((f[0], int(f[1])), []).append((f[2], f[3].split(","), _ad_counts(f[4])))
     return geno
 
 
@@ -480,11 +562,10 @@ def confirm(child: str, cands: list[dict], parents: list[str],
     for c in cands:
         verdicts = {}
         for p in parents:
-            gt, dp, alt_ad = parental[p].get((c["chrom"], c["pos"]), ("", 0, 0))
-            verdicts[p] = parent_verdict(gt, dp, alt_ad)
-            nonref = pileups[p].get((c["chrom"], c["pos"]))
-            if nonref is not None and nonref >= config.DN_PILEUP_MIN_ALT:
-                verdicts[p] = (INHERITED, f"{nonref} non-ref reads (pileup)")
+            site = (c["chrom"], c["pos"])
+            allele = (c["pos"], c["ref"], c["alt"])
+            verdicts[p] = with_pileup(parent_call(parental[p].get(site), *allele),
+                                      pileups[p].get(site), *allele)
         c["parents"] = verdicts
         statuses = {v[0] for v in verdicts.values()}
         # Any parent carrying it settles the question; otherwise every parent must have
@@ -531,7 +612,6 @@ def _annotate(child: str, cands: list[dict]) -> None:
         snap = latest_snapshot()
         if not snap:
             return
-        from .allele_balance import vep_key
         from .panel import sql_in_list
         con = connect()
         # The table holds VEP's allele form, so an indel sits one base right of its VCF
@@ -578,7 +658,8 @@ def _row(c: str, parents: list[str], cand: dict) -> str:
     csq = (cand.get("csq") or "—").split(",")[0]
     from . import enformer
     from .alphagenome_client import splice_label
-    k = (cand["chrom"], cand["pos"], cand["ref"], cand["alt"])
+    # The score tables are keyed like DuckDB, in VEP's allele form; the candidate is in VCF's.
+    k = vep_key(cand["chrom"], cand["pos"], cand["ref"], cand["alt"])
     regulatory = enformer.label(enformer.lookup(*k), k[2], k[3])
     splice = splice_label(*k, cand.get("gene"), cand.get("csq")) if config.INTERPRET_MODEL == "alphagenome2" else "—"
     return (f"| {cand['chrom']}:{cand['pos']} | {cand['ref']}>{cand['alt']} | {cand['kind']} | "
@@ -629,8 +710,9 @@ def _caveat_lines(confirmed: bool = True) -> list[str]:
         "cannot, HC returns a confident *wrong* hom-ref — it is not an independent test "
         "there. So every candidate is also checked against a **raw pileup** (no assembly, "
         "no genotype model): ≥"
-        f"{config.DN_PILEUP_MIN_ALT} non-reference reads in a parent marks it inherited "
-        "regardless of what any caller said.",
+        f"{config.DN_PILEUP_MIN_ALT} reads of this allele in a parent marks it inherited "
+        "regardless of what any caller said, and as many non-reference reads of anything "
+        "else rule out a de-novo call and leave the candidate indeterminate.",
     ] if confirmed else [
         "- **Absence from a parent's VCF is not evidence, and that is all this report has.** "
         "Both parents' VCFs are variant-only, so a site missing from them is either hom-ref "
@@ -813,10 +895,13 @@ def denovo(child: str, force: bool = False, confirm_parents: bool = True) -> Pat
         cands = confirm(child, cands, parents, force=force)
     _annotate(child, cands)
     # Persist confirmed coordinates for non-coding interpret priority; never call the API here.
+    # In VEP's allele form, because `interpret` matches them against DuckDB rows.
     from .alphagenome_client import _write_tsv
+    columns = ["chrom", "pos", "ref", "alt"]
     _write_tsv(_work_dir(child) / "confirmed.tsv",
-               [c for c in cands if confirm_parents and c.get("status") == CONFIRMED],
-               ["chrom", "pos", "ref", "alt"])
+               [dict(zip(columns, vep_key(c["chrom"], c["pos"], c["ref"], c["alt"])))
+                for c in cands if confirm_parents and c.get("status") == CONFIRMED],
+               columns)
     # Whether the parental pass RAN — not whether it found anything. Gating on `cands` made
     # a zero-candidate run print "the parental force-call pass did not run", which is false
     # and reads like a failure.

@@ -99,7 +99,7 @@ def _load() -> dict[tuple[str, str], bool]:
         sample, category = row.get("sample_id", ""), row.get("category", "")
         if not sample or not category:
             continue
-        granted = row.get("consent", "").strip().lower() in _TRUE
+        granted = (row.get("consent") or "").strip().lower() in _TRUE  # short row: None
         person = _person(sample)
         target = by_person if person == sample else from_callset
         target[(person, category)] = granted
