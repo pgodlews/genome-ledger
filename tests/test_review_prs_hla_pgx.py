@@ -81,6 +81,62 @@ def test_trans_dq25_is_recognised() -> None:
     check("DQ8 needs only DQB1",
           ": DQ8 " in hla_typing._risk_calls({"DQB1": ["DQB1*03:02"]})[1])
 
+    print("hla_typing._risk_calls (typing and tag SNPs disagree):")
+    other = {"B": ["B*07:02"], "DQA1": ["DQA1*01:01"], "DQB1": ["DQB1*05:01"]}
+    near = {"DQA1": ["DQA1*05:01"], "DQB1": ["DQB1*02:03"]}
+    trans = {"DQA1": ["DQA1*05:05"], "DQB1": ["DQB1*02:02"]}
+    b27 = {"B": ["B*27:05"]}
+    dq8 = {"DQB1": ["DQB1*03:02"]}
+    near_line = hla_typing._risk_calls(near)[1]
+    check("a near-miss DQ2 allele is not an exclusion",
+          "not determined" in near_line and "neither" not in near_line)
+    missed = hla_typing._risk_calls(near, {"DQ2.5": True})[1]
+    check("a tag-positive DQ2.5 that typing misses is unresolved",
+          "unresolved" in missed and "neither" not in missed)
+    check("a tag-positive DQ2.5 with unrelated alleles is unresolved",
+          "unresolved" in hla_typing._risk_calls(other, {"DQ2.5": True})[1])
+    check("a tag-positive DQ2.5 without DQ typing is unresolved",
+          "unresolved" in hla_typing._risk_calls({}, {"DQ2.5": True})[1])
+    check("a typed DQ2.5 with a negative tag stands (trans)",
+          ": DQ2.5 " in hla_typing._risk_calls(trans, {"DQ2.5": False})[1])
+    check("a typed DQ8 with a negative tag is unresolved",
+          "unresolved" in hla_typing._risk_calls(dq8, {"DQ8": False})[1])
+    check("agreeing negatives stay neither",
+          "neither" in hla_typing._risk_calls(other, {"DQ2.5": False, "DQ8": False})[1])
+    check("a tag no-call is not a disagreement",
+          "neither" in hla_typing._risk_calls(other, {"DQ2.5": None, "DQ8": None})[1])
+    check("B27 tag positive with no typed B*27 is unresolved",
+          "unresolved" in hla_typing._risk_calls(other, {"B27": True})[0])
+    check("typed B*27 with a negative tag is unresolved",
+          "unresolved" in hla_typing._risk_calls(b27, {"B27": False})[0])
+    check("agreeing B27 negatives stay absent",
+          "absent" in hla_typing._risk_calls(other, {"B27": False})[0])
+
+
+def test_tag_status() -> None:
+    print("hla.tag_status:")
+    vcf = _vcf("hla_status", [])
+    rules = TMP / "hla_status.tsv"
+    rules.write_text("trait\trsid\tchrom\tpos\tref\teffect\tinterp0\tinterp1\tinterp2\n"
+                     "HLA-B27 (ankylosing spondylitis)\trs0000003\t1\t140\tG\tA\tno\thet\thom\n"
+                     "Celiac DQ2.5 haplotype\trs0000001\t1\t150\tG\tT\tno\thet\thom\n"
+                     "Celiac DQ8 haplotype\trs0000002\t1\t160\tG\tT\tno\thet\thom\n")
+    forced = {("1", "140"): {"nocall": False, "alleles": ("G", "G")},
+              ("1", "150"): {"nocall": False, "alleles": ("G", "T")},
+              ("1", "160"): {"nocall": True, "alleles": (".", ".")}}
+    saved = config.HLA_FILE, hla._called_vcf, forcecall.read_genotypes
+    config.HLA_FILE, hla._called_vcf = rules, lambda s: vcf
+    hla.forcecall.read_genotypes = lambda s: forced
+    try:
+        status = hla.tag_status("Maria")
+        hla._called_vcf = lambda s: TMP / "no_such.vcf.gz"
+        missing = hla.tag_status("Maria")
+    finally:
+        config.HLA_FILE, hla._called_vcf, forcecall.read_genotypes = saved
+    check("reads carrier, non-carrier and no-call",
+          status == {"B27": False, "DQ2.5": True, "DQ8": None})
+    check("an unreadable VCF means no cross-check", missing == {})
+
 
 def test_tag_negative_does_not_reassure() -> None:
     print("hla.hla_report (a tag negative is not an exclusion):")
@@ -327,7 +383,8 @@ def test_multi_record_site_is_not_hom_ref() -> None:
          prs._reference_scores, prs._called_vcf, config.PGS_DIR, config.PRS_PLINK_MIN) = saved
 
 
-TESTS = [test_trans_dq25_is_recognised, test_tag_negative_does_not_reassure, test_cram_file_uri,
+TESTS = [test_trans_dq25_is_recognised, test_tag_status, test_tag_negative_does_not_reassure,
+         test_cram_file_uri,
          test_pgx_flags_by_exact_value, test_absent_indel_rows, test_colocated_genotypes,
          test_colocated_frequencies, test_missing_frequency, test_partial_pvars,
          test_population_map_download, test_duplicate_coordinate_not_credited,

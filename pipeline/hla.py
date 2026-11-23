@@ -9,10 +9,52 @@ classical HLA typing (no 4-digit alleles, no loci beyond B/DQA1/DQB1) — see
 
 from __future__ import annotations
 
+import shutil
+
 from . import reportpaths
 from . import config, forcecall
 from .traits import _alleles_at, _called_vcf
 from .util import log, read_tsv, require_tools, write_report
+
+# The tag rules, under the short names the typed report compares them by.
+_TAG_TRAITS = {"B27": "HLA-B27 (ankylosing spondylitis)",
+               "DQ2.5": "Celiac DQ2.5 haplotype",
+               "DQ8": "Celiac DQ8 haplotype"}
+
+
+def _read_tags(rules: list[dict], vcf, forced: dict) -> tuple[list, dict, set]:
+    """(report rows, trait -> carrier, traits with a no-call) for the tag SNPs in `rules`."""
+    rows, present, nocalls = [], {}, set()
+    for r in rules:
+        g = forced.get((r["chrom"], r["pos"]))
+        pair = None if (g and g["nocall"]) else (
+            (g["alleles"][0], g["alleles"][1]) if g
+            else _alleles_at(vcf, r["chrom"], r["pos"], r["ref"]))
+        if pair is None:
+            rows.append((r["trait"], "./.", r["rsid"],
+                         "Indeterminate — no-call (low coverage at this position)"))
+            present[r["trait"]] = False
+            nocalls.add(r["trait"])
+            log.info("  %-38s ./.  → no-call (low coverage)", r["trait"])
+            continue
+        a1, a2 = pair
+        n = [a1, a2].count(r["effect"])
+        rows.append((r["trait"], f"{a1}/{a2}", r["rsid"], r[f"interp{n}"]))
+        present[r["trait"]] = n > 0
+        log.info("  %-38s %s/%s → %s", r["trait"], a1, a2, r[f"interp{n}"])
+    return rows, present, nocalls
+
+
+def tag_status(sample: str) -> dict[str, bool | None]:
+    """{B27, DQ2.5, DQ8} -> carrier, non-carrier, or None for a no-call. Empty when the tag
+    SNPs cannot be read here, so a caller can tell "no cross-check" from a negative."""
+    rules = read_tsv(config.HLA_FILE)
+    vcf = _called_vcf(sample)
+    if not rules or not vcf.exists() or shutil.which("bcftools") is None:
+        return {}
+    _, present, nocalls = _read_tags(rules, vcf, forcecall.read_genotypes(sample))
+    return {key: None if trait in nocalls else present[trait]
+            for key, trait in _TAG_TRAITS.items() if trait in present}
 
 
 def hla_report(sample: str, force: bool = False):
@@ -40,24 +82,7 @@ def hla_report(sample: str, force: bool = False):
     if forced:
         log.info("hla: using force-called genotypes (%d sites)", len(forced))
 
-    rows, present, nocalls = [], {}, set()
-    for r in rules:
-        g = forced.get((r["chrom"], r["pos"]))
-        pair = None if (g and g["nocall"]) else (
-            (g["alleles"][0], g["alleles"][1]) if g
-            else _alleles_at(vcf, r["chrom"], r["pos"], r["ref"]))
-        if pair is None:
-            rows.append((r["trait"], "./.", r["rsid"],
-                         "Indeterminate — no-call (low coverage at this position)"))
-            present[r["trait"]] = False
-            nocalls.add(r["trait"])
-            log.info("  %-38s ./.  → no-call (low coverage)", r["trait"])
-            continue
-        a1, a2 = pair
-        n = [a1, a2].count(r["effect"])
-        rows.append((r["trait"], f"{a1}/{a2}", r["rsid"], r[f"interp{n}"]))
-        present[r["trait"]] = n > 0
-        log.info("  %-38s %s/%s → %s", r["trait"], a1, a2, r[f"interp{n}"])
+    rows, present, nocalls = _read_tags(rules, vcf, forced)
 
     dq25 = present.get("Celiac DQ2.5 haplotype", False)
     dq8 = present.get("Celiac DQ8 haplotype", False)

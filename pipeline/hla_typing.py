@@ -20,7 +20,7 @@ from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 from . import reportpaths
-from . import config
+from . import config, hla
 from .call import aligned_cram
 from .util import log, require_tools, run, write_report
 
@@ -118,8 +118,12 @@ _DQA1_DQ25 = frozenset({"DQA1*05:01", "DQA1*05:05"})
 _DQB1_DQ25 = frozenset({"DQB1*02:01", "DQB1*02:02"})
 
 
-def _risk_calls(genotype: dict[str, list[str]]) -> list[str]:
-    """Re-derive the same two tag-SNP-based calls in hla.py from typed alleles."""
+def _risk_calls(genotype: dict[str, list[str]],
+                tags: dict[str, bool | None] | None = None) -> list[str]:
+    """Re-derive the same two tag-SNP-based calls in hla.py from typed alleles. `tags` is
+    `hla.tag_status`: where it disagrees with the typing, the call is unresolved, because a
+    thinly covered locus can type to the wrong allele and that must not read as a negative."""
+    tags = tags or {}
     b = [_four_digit(a) for a in genotype.get("B", [])]
     dqa1 = [_four_digit(a) for a in genotype.get("DQA1", [])]
     dqb1 = [_four_digit(a) for a in genotype.get("DQB1", [])]
@@ -135,6 +139,12 @@ def _risk_calls(genotype: dict[str, list[str]]) -> list[str]:
     if not b:
         # No call means too few reads, which says nothing about whether B*27 is there.
         calls.append("**HLA-B27**: not determined (no B calls: HLA-B could not be typed)")
+    elif tags.get("B27") is True and not b27_alleles:
+        calls.append(f"**HLA-B27**: unresolved (tag SNP positive, typed alleles show no B*27: "
+                     f"{', '.join(b)})")
+    elif tags.get("B27") is False and b27_alleles:
+        calls.append(f"**HLA-B27**: unresolved (typed {', '.join(b27_alleles)}, "
+                     f"tag SNP negative)")
     elif b27_alleles and not assoc:
         calls.append(f"**HLA-B27**: present but **non-associated subtype** "
                      f"({', '.join(b27_alleles)}) — not linked to ankylosing spondylitis")
@@ -148,8 +158,22 @@ def _risk_calls(genotype: dict[str, list[str]]) -> list[str]:
     dq8 = "DQB1*03:02" in dqb1
     # "neither" needs DQB1, and DQA1 too wherever a DQ2 beta chain could complete DQ2.5.
     excluded = bool(dqb1) and (bool(dqa1) or not set(dqb1) & _DQB1_DQ25)
-    hap = (" + ".join(h for h, p in [("DQ2.5", dq25), ("DQ8", dq8)] if p)
-           or ("neither" if excluded else "not determined"))
+    typed = [h for h, p in [("DQ2.5", dq25), ("DQ8", dq8)] if p]
+    # A typed DQ2.5 with a negative tag stands: the tag cannot see DQ2.5 formed in trans.
+    missed = [h for h in ("DQ2.5", "DQ8") if tags.get(h) is True and h not in typed]
+    unbacked = dq8 and tags.get("DQ8") is False
+    if missed or unbacked:
+        parts = [f"typed {h}" for h in typed if not (h == "DQ8" and unbacked)]
+        parts += [f"tag SNP shows {h}, typing did not confirm it" for h in missed]
+        parts += ["typing shows DQ8, tag SNP does not"] if unbacked else []
+        hap = f"unresolved ({'; '.join(parts)})"
+    elif typed:
+        hap = " + ".join(typed)
+    elif any(a.startswith("DQA1*05") for a in dqa1) and any(a.startswith("DQB1*02") for a in dqb1):
+        # One wrong second field away from DQ2.5, so this cannot count as an exclusion.
+        hap = "not determined (DQA1*05 with a DQB1*02 allele outside the DQ2.5 set)"
+    else:
+        hap = "neither" if excluded else "not determined"
     calls.append(f"**Celiac haplotype** (DQ2.5/DQ8): {hap} "
                  f"(DQA1 {', '.join(dqa1) or '?'}; DQB1 {', '.join(dqb1) or '?'})")
     return calls
@@ -181,6 +205,7 @@ def hla_typing_report(sample: str, force: bool = False) -> Path:
 
     rows = [(g, ", ".join(_four_digit(a) for a in genotype.get(g, [])) or "no call")
             for g in config.HLA_TYPE_GENES]
+    tags = hla.tag_status(sample)
 
     lines = [
         f"# HLA typing (classical, arcasHLA) — {sample}",
@@ -190,7 +215,7 @@ def hla_typing_report(sample: str, force: bool = False) -> Path:
         *[f"| HLA-{g} | {a} |" for g, a in rows],
         "",
         "## Risk calls re-derived from typed alleles",
-        *[f"- {c}" for c in _risk_calls(genotype)],
+        *[f"- {c}" for c in _risk_calls(genotype, tags)],
         "",
         "## Notes",
         "- arcasHLA was built for RNA-seq but is widely used on WGS/exome BAMs too; it "
@@ -199,10 +224,15 @@ def hla_typing_report(sample: str, force: bool = False) -> Path:
         "a het that collapsed to one), the tool's known limitation, not a data gap.",
         "- `no call` means too few reads reached that locus for arcasHLA to type it. It is "
         "not evidence that any allele is absent.",
-        "- Compare against `hla` (tag-SNP report) for the same sample — the risk calls "
-        "here should agree; a disagreement means the tag SNP tags an uncommon haplotype "
-        "for this genome, or DQ2.5 formed in trans, which the tag cannot see. The typed "
-        "allele here is the more trustworthy call.",
+        ("- Risk calls were cross-checked against the tag SNPs in the `hla` report. "
+         "`unresolved` means the two disagree, and neither side counts as a negative. A typed "
+         "DQ2.5 with a negative tag can be real, because the tag cannot see DQ2.5 formed in "
+         "trans." if tags else
+         "- The tag SNPs could not be read for this run, so these risk calls were not "
+         "cross-checked against the `hla` report."),
+        "- Short-read WGS can leave few reads per HLA gene, and a thinly covered locus can "
+        "type to the wrong allele. Check alleles against relatives or an orthogonal assay "
+        "before relying on them.",
         "- Research-grade; clinically actionable HLA results (e.g. B27, celiac) warrant "
         "confirmatory testing.",
         "",
