@@ -66,6 +66,21 @@ def test_trans_dq25_is_recognised() -> None:
     alone = hla_typing._risk_calls({"DQA1": ["DQA1*02:01"], "DQB1": ["DQB1*02:02"]})
     check("DQ2.2 alone is not called DQ2.5", "neither" in alone[1])
 
+    print("hla_typing._risk_calls (an untyped locus is not a negative):")
+    untyped = hla_typing._risk_calls({"DQA1": ["DQA1*01:01"], "DQB1": ["DQB1*05:01"]})
+    check("no HLA-B call is not reported as B27 absent",
+          "not determined" in untyped[0] and "absent" not in untyped[0])
+    check("typed HLA-B without B*27 is still absent",
+          "absent" in hla_typing._risk_calls({"B": ["B*07:02"]})[0])
+    check("no DQB1 call leaves celiac undetermined",
+          "not determined" in hla_typing._risk_calls({"DQA1": ["DQA1*05:01"]})[1])
+    check("a DQ2 beta chain without DQA1 leaves celiac undetermined",
+          "not determined" in hla_typing._risk_calls({"DQB1": ["DQB1*02:01"]})[1])
+    check("DQB1 with neither risk chain excludes both without DQA1",
+          "neither" in hla_typing._risk_calls({"DQB1": ["DQB1*05:01"]})[1])
+    check("DQ8 needs only DQB1",
+          ": DQ8 " in hla_typing._risk_calls({"DQB1": ["DQB1*03:02"]})[1])
+
 
 def test_tag_negative_does_not_reassure() -> None:
     print("hla.hla_report (a tag negative is not an exclusion):")

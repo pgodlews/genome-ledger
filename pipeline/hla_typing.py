@@ -132,19 +132,24 @@ def _risk_calls(genotype: dict[str, list[str]]) -> list[str]:
     b27_alleles = [a for a in b if a.startswith("B*27")]
     assoc = [a for a in b27_alleles if a not in _B27_NON_ASSOCIATED]
     b27 = bool(assoc)
-    if b27_alleles and not assoc:
+    if not b:
+        # No call means too few reads, which says nothing about whether B*27 is there.
+        calls.append("**HLA-B27**: not determined (no B calls: HLA-B could not be typed)")
+    elif b27_alleles and not assoc:
         calls.append(f"**HLA-B27**: present but **non-associated subtype** "
                      f"({', '.join(b27_alleles)}) — not linked to ankylosing spondylitis")
     else:
-        calls.append(f"**HLA-B27**: {'present' if b27 else 'absent'} "
-                     f"({', '.join(b) or 'no B calls'})")
+        calls.append(f"**HLA-B27**: {'present' if b27 else 'absent'} ({', '.join(b)})")
 
     # The heterodimer forms whether its two chains come from one haplotype (DR3: DQA1*05:01 +
     # DQB1*02:01) or from both (DR5-DQ7 / DR7-DQ2.2: DQA1*05:05 + DQB1*02:02), so this needs
     # no phasing. Requiring *02:01 reported every trans carrier as "neither".
     dq25 = bool(set(dqa1) & _DQA1_DQ25) and bool(set(dqb1) & _DQB1_DQ25)
     dq8 = "DQB1*03:02" in dqb1
-    hap = " + ".join(h for h, p in [("DQ2.5", dq25), ("DQ8", dq8)] if p) or "neither"
+    # "neither" needs DQB1, and DQA1 too wherever a DQ2 beta chain could complete DQ2.5.
+    excluded = bool(dqb1) and (bool(dqa1) or not set(dqb1) & _DQB1_DQ25)
+    hap = (" + ".join(h for h, p in [("DQ2.5", dq25), ("DQ8", dq8)] if p)
+           or ("neither" if excluded else "not determined"))
     calls.append(f"**Celiac haplotype** (DQ2.5/DQ8): {hap} "
                  f"(DQA1 {', '.join(dqa1) or '?'}; DQB1 {', '.join(dqb1) or '?'})")
     return calls
@@ -192,6 +197,8 @@ def hla_typing_report(sample: str, force: bool = False) -> Path:
         "pseudoaligns chr6-extracted reads against the IMGT/HLA reference with kallisto. "
         "Homozygous loci report a single allele (no true second call to distinguish from "
         "a het that collapsed to one), the tool's known limitation, not a data gap.",
+        "- `no call` means too few reads reached that locus for arcasHLA to type it. It is "
+        "not evidence that any allele is absent.",
         "- Compare against `hla` (tag-SNP report) for the same sample — the risk calls "
         "here should agree; a disagreement means the tag SNP tags an uncommon haplotype "
         "for this genome, or DQ2.5 formed in trans, which the tag cannot see. The typed "
