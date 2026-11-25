@@ -148,4 +148,4 @@ def summary(out: dict) -> str:
         n = len((out.get("rescored") or {}).get("scored", []))
         parts.append(f"re-harmonised upstream: {', '.join(out['reharmonised'])}; "
                      f"{n} result(s) recomputed")
-    return "; ".join(parts[:1]) + " " + "; ".join(parts[1:]) + "."
+    return (parts[0] + " " + "; ".join(p.rstrip(".") for p in parts[1:])).rstrip() + "."
