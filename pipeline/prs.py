@@ -766,8 +766,13 @@ def _empty_marker(workdir: Path, chrom: str) -> Path:
 
 
 def _has_records(vcf: Path) -> bool:
-    proc = subprocess.run(["bcftools", "view", "-H", str(vcf)], capture_output=True, text=True)
-    return bool(proc.stdout.strip())
+    """Does this (b)gzipped VCF hold any record? Unreadable counts as yes: only a file that
+    is positively empty becomes an empty marker; anything else goes on to plink2 as before."""
+    try:
+        with gzip.open(vcf, "rt") as fh:
+            return any(not line.startswith("#") for line in fh)
+    except (OSError, EOFError, UnicodeDecodeError):
+        return True
 
 
 def _kg_ref_pgen(chrom: str, chrom_vars, workdir: Path) -> Path | None:
