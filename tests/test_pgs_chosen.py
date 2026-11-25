@@ -702,57 +702,49 @@ def test_local_zero_rows_are_an_answer() -> None:
 
 
 def test_update() -> None:
-    print("pgs update: nothing unless the release changed; builds what the store lacks:")
+    print("pgs update: on demand, and only for the scores someone chose:")
     from pipeline import pgs_update
-    store = ROOT / "store"
-    (store / "2026-01-02" / "bundles").mkdir(parents=True, exist_ok=True)
-    saved = (pgs_update.remote_release, pgs_catalog.sync, pgs_chosen.fetch, pgs_update.notify.notify,
-             pgs_chosen.remote_header)
-    pgs_chosen.remote_header = lambda pid: {}            # no network in tests
-    calls, notes = [], []
-    pgs_update.notify.notify = lambda m: notes.append(m) or True
+    used = pgs_update.used_scores()
+    saved = (pgs_update.remote_release, pgs_catalog.sync, pgs_chosen.fetch, pgs_chosen.remote_header,
+             pgs_chosen.rescore_stale, config.PGS_OFFLINE)
+    syncs, fetched = [], []
+    pgs_catalog.sync = lambda *a, **k: syncs.append(1) or pgs_catalog.current_dir()
+    pgs_chosen.fetch = lambda pids, **k: fetched.append((list(pids), k)) or list(pids)
+    pgs_chosen.rescore_stale = lambda: {"scored": [("x", used[0])], "failed": []}
     try:
-        pgs_update.remote_release = lambda: {"date": "2026-01-02"}
-        out = pgs_update.update(store)
-        check("an unchanged release does nothing and notifies nothing",
-              not out["changed"] and notes == [])
-        pgs_update.remote_release = lambda: {"date": "2026-02-01"}
-        pgs_catalog.sync = lambda *a, **k: pgs_catalog.current_dir()
-
-        def fake_fetch(pids, to=None, refresh=False, prune=False, batch=1, link=False):
-            calls.append(list(pids))
-            done = []
-            for p in pids:
-                if p == PID_B:
-                    pgs_chosen.fetch_errors[p] = "cannot be scored here: has is_haplotype rows, which this engine does not model"
-                    continue
-                (Path(to) / "bundles" / p).mkdir(parents=True, exist_ok=True)
-                (Path(to) / "bundles" / p / "bundle.json").write_text("{}")
-                done.append(p)
-            return done
-        from pathlib import Path
-        pgs_chosen.fetch = fake_fetch
-        out = pgs_update.update(store)
-        check(f"a new release builds every computable score the store lacks (got {calls})",
-              out["changed"] and sorted(calls[0]) == sorted([PID_A, PID_AB, PID_B]))
-        check("a haplotype refusal is remembered in refused.tsv",
-              PID_B in pgs_update.refused(store))
-        check("one notification, naming the release and the counts",
-              len(notes) == 1 and "2026-02-01" in notes[0] and "2 new score bundle(s)" in notes[0]
-              and "1 refused" in notes[0])
-        calls.clear()
-        out = pgs_update.update(store, force=True)
-        check("next time neither built nor refused ones are retried", calls == [])
-        for p in (PID_A, PID_AB):
-            import shutil
-            shutil.rmtree(store / "2026-02-01" / "bundles" / p)
-        calls.clear(); notes.clear()
-        out = pgs_update.update(store, max_new=1, force=True)
-        check("more new scores than --max-new: nothing built, and it says so",
-              out["too_many"] and calls == [] and "too many" in notes[0])
+        check(f"there are chosen results to update ({used})", bool(used))
+        current = pgs_catalog.current_dir().name
+        pgs_update.remote_release = lambda: {"date": current}
+        pgs_chosen.remote_header = lambda pid: {}
+        out = pgs_update.update()
+        check("same release, nothing re-harmonised: no snapshot, nothing downloaded",
+              not out["new_release"] and syncs == [] and fetched == [])
+        pgs_update.remote_release = lambda: {"date": "2099-01-01"}
+        pgs_chosen.remote_header = lambda pid: {"HmPOS_date": "2099-01-01"} if pid == used[0] else {}
+        out = pgs_update.update(dry_run=True)
+        check("--dry-run reports the release and the re-harmonised file, changes nothing",
+              out["new_release"] and out["reharmonised"] == [used[0]] and syncs == [] and fetched == [])
+        out = pgs_update.update()
+        check("a new release takes a snapshot", syncs == [1])
+        check("only the chosen, re-harmonised score is downloaded again, with --refresh",
+              fetched == [([used[0]], {"refresh": True})])
+        check("…and its results recomputed", "1 result(s) recomputed" in out["message"])
+        def boom(pid):
+            raise OSError("no route")
+        pgs_chosen.remote_header = boom
+        out = pgs_update.update()
+        check("an unreachable file is reported, not treated as unchanged",
+              out["unchecked"] == used and "Could not check upstream" in out["message"])
+        config.PGS_OFFLINE = True
+        try:
+            pgs_update.update()
+            check("PGS_OFFLINE refuses", False)
+        except SystemExit as e:
+            check("PGS_OFFLINE refuses, saying how to do it on a connected machine",
+                  "pgs fetch" in str(e))
     finally:
-        (pgs_update.remote_release, pgs_catalog.sync, pgs_chosen.fetch, pgs_update.notify.notify,
-         pgs_chosen.remote_header) = saved
+        (pgs_update.remote_release, pgs_catalog.sync, pgs_chosen.fetch, pgs_chosen.remote_header,
+         pgs_chosen.rescore_stale, config.PGS_OFFLINE) = saved
 
 
 TESTS = [test_covariates, test_catalog_summary, test_gate_before_download, test_consent_and_score,

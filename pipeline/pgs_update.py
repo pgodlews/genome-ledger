@@ -1,65 +1,26 @@
-"""Keep a bundle store in step with the PGS Catalog: `run.py pgs update --store DIR`.
+"""Bring the scores you chose up to date with the PGS Catalog: `run.py pgs update`.
 
-Meant for a nightly timer. Each run costs one request to the Catalog's REST API; nothing else
-happens unless the Catalog has published a new release since the local snapshot (about monthly,
-usually 5-65 new scores, occasionally a dump of a thousand or more). On a new release:
+Run it when you want to; it is not a timer job. It only ever touches scores someone here chose:
 
-  1. take the new catalog snapshot (pgs_catalog.sync);
-  2. list the scores the engine can compute that the store does not hold yet, minus those
-     already known to be uncomputable (STORE/refused.tsv: haplotype, interaction or per-dosage
-     rows, found by reading the files), so they are not retried every month;
-  3. build their bundles into STORE/<release>/ in batches (pgs_chosen.fetch), unless there are
-     more than `max_new`: then build nothing and say so, because a dump that size is a job for
-     a bigger machine;
-  4. for the scores the family has actually been scored with, ask whether the Catalog
-     re-harmonised their files (same model, new positions); rebuild those bundles and
-     recompute the results that depended on them (consent still holds, so this is in scope);
-  5. send one notification with what changed (notify.notify).
+  1. If the Catalog has published a release newer than the local snapshot, take a new snapshot,
+     so `pgs search`, `pgs show` and the picker see the new scores.
+  2. For every score someone here was scored with, ask whether the Catalog re-harmonised its
+     file (the same model with its positions re-mapped: `#HmPOS_date` in the header). If it did,
+     download it again, rebuild its reference data and recompute the results that used it.
+     Consent still holds: it is the same model for the same trait.
+  3. List newer scores for the same traits. They are not run: switching models is a new choice.
 
-The store is a directory of release folders, each `pgs import`-able:
-    STORE/2026-11-24/bundles/PGS.../   STORE/2026-11-24/catalog/2026-11-24/   STORE/refused.tsv
+It never downloads or builds a score nobody chose. On an air-gapped machine, do the network part
+on a connected one (`pgs sync --to DIR`, `pgs fetch <ids> --refresh --to DIR`) and `pgs import`
+the result, then `pgs score --stale`.
 """
 
 from __future__ import annotations
 
 import json
-import os
-from pathlib import Path
 
-from . import config, notify, pgs_catalog, pgs_chosen
+from . import config, pgs_catalog, pgs_chosen
 from .util import log
-
-REFUSED = "refused.tsv"
-
-
-def bundled(store: Path) -> set[str]:
-    """Score ids with an intact-looking bundle anywhere in the store (bundle.json present)."""
-    out = set()
-    for rel in Path(store).iterdir() if Path(store).is_dir() else []:
-        b = rel / "bundles"
-        if b.is_dir():
-            out |= {d.name for d in b.iterdir() if (d / pgs_chosen.BUNDLE_FILE).is_file()}
-    return out
-
-
-def refused(store: Path) -> dict[str, str]:
-    try:
-        lines = (Path(store) / REFUSED).read_text().splitlines()
-    except OSError:
-        return {}
-    out = {}
-    for line in lines:
-        pid, _tab, why = line.partition("\t")
-        if pid.startswith("PGS"):
-            out[pid] = why
-    return out
-
-
-def _write_refused(store: Path, rows: dict[str, str]) -> None:
-    p = Path(store) / REFUSED
-    tmp = p.with_name(f"{p.name}.{os.getpid()}.part")
-    tmp.write_text("".join(f"{k}\t{v}\n" for k, v in sorted(rows.items())))
-    os.replace(tmp, p)
 
 
 def remote_release() -> dict:
@@ -67,85 +28,80 @@ def remote_release() -> dict:
     return info.get("latest_release") or {}
 
 
-def update(store: Path, max_new: int = 300, batch: int = 40, dry_run: bool = False,
-           force: bool = False) -> dict:
-    """One update run. Returns what it found and did; notifies only when something changed."""
-    store = Path(store)
-    latest = remote_release()
-    release = latest.get("date") or ""
+def used_scores() -> list[str]:
+    """Every score id with a result for someone here."""
+    return sorted({r["pgs_id"] for cs in pgs_chosen.scored_callsets()
+                   for r in pgs_chosen.results(cs)})
+
+
+def update(dry_run: bool = False) -> dict:
+    """One on-demand update. Returns what it found and did; with `dry_run`, only what it found."""
+    if config.PGS_OFFLINE:
+        raise SystemExit("PGS_OFFLINE is set: pgs update needs the network. On a connected "
+                         "machine run `pgs sync --to DIR` and `pgs fetch <ids> --refresh --to DIR`, "
+                         "then `pgs import DIR` and `pgs score --stale` here.")
     cur = pgs_catalog.current_dir()
     previous = cur.name if cur else ""
-    out = {"release": release, "previous": previous, "changed": bool(release) and release != previous,
-           "built": [], "failed": [], "refused": [], "too_many": False, "reharmonised": []}
-    if not out["changed"] and not force:
-        log.info("PGS Catalog release %s unchanged — nothing to do.", previous or "?")
-        return out
-    if not store.is_dir():
-        raise SystemExit(f"bundle store {store} is not reachable")
-    snap = pgs_catalog.sync() if not dry_run else cur
-    cat = pgs_catalog.load(snap)
-    known_bad = refused(store)
-    missing = sorted(set(pgs_catalog.select(cat)) - bundled(store) - set(known_bad))
-    out["missing"] = missing
-    log.info("PGS Catalog %s: %d computable score(s) not in the store yet.", release, len(missing))
+    release = remote_release().get("date") or ""
+    out = {"release": release, "previous": previous,
+           "new_release": bool(release) and release != previous,
+           "used": used_scores(), "reharmonised": [], "unchecked": [], "rescored": {},
+           "newer": {}, "dry_run": dry_run}
+    if out["new_release"] and not dry_run:
+        pgs_catalog.sync()
 
-    if len(missing) > max_new:
-        out["too_many"] = True
-    elif missing and not dry_run:
-        to = store / release
-        done = pgs_chosen.fetch(missing, to=to, batch=batch, prune=True)
-        out["built"] = done
-        for pid in missing:
-            if pid in done:
-                continue
-            why = pgs_chosen.fetch_errors.get(pid, "")
-            if "does not model" in why or "not on an additive" in why:
-                known_bad[pid] = why
-                out["refused"].append(pid)
-            else:
-                out["failed"].append((pid, why))
-        if out["refused"]:
-            _write_refused(store, known_bad)
-
-    # Re-harmonised files among the scores the family was actually scored with.
-    used = sorted({r["pgs_id"] for cs in pgs_chosen.scored_callsets()
-                   for r in pgs_chosen.results(cs)})
-    for pid in used:
+    for pid in out["used"]:
+        path = pgs_chosen.scoring_path(pid)
+        local = pgs_chosen.file_header(path).get("HmPOS_date", "") if path.exists() else ""
         try:
-            local = pgs_chosen.file_header(pgs_chosen.scoring_path(pid)).get("HmPOS_date", "") \
-                if pgs_chosen.scoring_path(pid).exists() else ""
             remote = pgs_chosen.remote_header(pid).get("HmPOS_date", "")
-        except Exception as e:  # noqa: BLE001 — offline or transient; next release retries
+        except Exception as e:  # noqa: BLE001 — offline or transient: say so, carry on
             log.warning("%s: could not check upstream (%s)", pid, e)
+            out["unchecked"].append(pid)
             continue
-        if remote and local and remote != local:
+        if remote and remote != local:
             out["reharmonised"].append(pid)
     if out["reharmonised"] and not dry_run:
-        pgs_chosen.fetch(out["reharmonised"], to=store / release, refresh=True, batch=batch,
-                         prune=True)
+        pgs_chosen.fetch(out["reharmonised"], refresh=True)
         out["rescored"] = pgs_chosen.rescore_stale()
 
-    msg = summary(out)
-    out["message"] = msg
-    if not dry_run:
-        notify.notify(msg)
+    try:
+        cat = pgs_catalog.load()
+    except SystemExit:
+        cat = None
+    for pid in out["used"] if cat is not None else []:
+        newer = cat.newer(pid)
+        if newer:
+            out["newer"][pid] = newer
+    out["message"] = summary(out)
     return out
 
 
 def summary(out: dict) -> str:
-    parts = [f"PGS Catalog {out['release']} (was {out['previous'] or 'none'}):"]
-    if out["too_many"]:
-        parts.append(f"{len(out.get('missing', []))} new scores, too many to build here; "
-                     "nothing built. Run a bigger batch build (pgs fetch --batch) on demand.")
+    lines = []
+    if out["new_release"]:
+        verb = "is available" if out["dry_run"] else "snapshot taken"
+        lines.append(f"PGS Catalog release {out['release']} {verb} (was {out['previous'] or 'none'}).")
     else:
-        parts.append(f"{len(out['built'])} new score bundle(s) built")
-        if out["refused"]:
-            parts.append(f"{len(out['refused'])} refused (haplotype/interaction/per-dosage)")
-        if out["failed"]:
-            parts.append(f"{len(out['failed'])} FAILED, will retry next release: "
-                         + ", ".join(p for p, _w in out["failed"][:8]))
+        lines.append(f"PGS Catalog release {out['previous'] or '?'} is current.")
+    if not out["used"]:
+        lines.append("No chosen scores have results yet, so there is nothing else to update.")
+        return "\n".join(lines)
     if out["reharmonised"]:
-        n = len((out.get("rescored") or {}).get("scored", []))
-        parts.append(f"re-harmonised upstream: {', '.join(out['reharmonised'])}; "
-                     f"{n} result(s) recomputed")
-    return (parts[0] + " " + "; ".join(p.rstrip(".") for p in parts[1:])).rstrip() + "."
+        if out["dry_run"]:
+            lines.append(f"Re-harmonised upstream, would be rebuilt and recomputed: "
+                         f"{', '.join(out['reharmonised'])}.")
+        else:
+            r = out["rescored"] or {}
+            lines.append(f"Re-harmonised upstream and rebuilt: {', '.join(out['reharmonised'])}; "
+                         f"{len(r.get('scored', []))} result(s) recomputed"
+                         + (f", {len(r['failed'])} failed" if r.get("failed") else "") + ".")
+    else:
+        lines.append(f"None of the {len(out['used'])} chosen score(s) was re-harmonised.")
+    if out["unchecked"]:
+        lines.append(f"Could not check upstream: {', '.join(out['unchecked'])}.")
+    for pid, newer in out["newer"].items():
+        lines.append(f"{pid}: {len(newer)} newer score(s) for the same trait: "
+                     f"{', '.join(newer[:6])}{' …' if len(newer) > 6 else ''}. Not run: choosing "
+                     "another model is a new choice.")
+    return "\n".join(lines)

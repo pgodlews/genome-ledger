@@ -130,6 +130,11 @@ panel report is never changed by any of this.
 Every result records what it was computed from: the scoring file, its harmonisation date, the
 reference data, the genotypes and the engine version.
 
+- `pgs update` does all of the below in one go, on demand: it takes a new catalog snapshot if
+  the Catalog has published a release since the last one (about monthly), rebuilds any chosen
+  score whose file was re-harmonised and recomputes its results, and lists newer scores for the
+  same traits. It only touches scores someone here chose; `--dry-run` reports without changing
+  anything.
 - `pgs status` lists every result as `current`, or names what changed.
 - `pgs score --stale` recomputes the stale ones, for people whose consent still stands.
 - `pgs check` asks the Catalog whether a scoring file was **re-harmonised**: the same model,
@@ -139,23 +144,3 @@ reference data, the genotypes and the engine version.
   although consent for the trait already covers it.
 - A PGS id is never reused for a different model. When authors revise a score, it gets a new
   id.
-
-## A bundle store that follows the Catalog
-
-The PGS Catalog publishes a release about once a month: usually 5–65 new scores, occasionally a
-dump of a thousand or more. `pgs update --store DIR` keeps a store of bundles in step:
-
-```bash
-uv run python run.py pgs update --store /path/to/pgs-bundles      # e.g. from a nightly timer
-```
-
-- Each run costs one request to the Catalog. Nothing else happens until there is a new release.
-- On a new release it takes a fresh catalog snapshot, builds bundles (in batches) for every
-  computable score the store does not hold into `DIR/<release>/`, and remembers the scores the
-  engine cannot model in `DIR/refused.tsv` so they are not retried. More than `--max-new` (300)
-  new scores and it builds nothing, and says so: that is a job for a bigger machine.
-- For scores the family was actually scored with, it checks whether the Catalog re-harmonised
-  their files, rebuilds those bundles and recomputes the results that depended on them.
-- It sends one notification (`NOTIFY_CMD`) when something changed.
-
-Every release folder in the store is `pgs import`-able on its own.

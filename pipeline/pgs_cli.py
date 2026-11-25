@@ -86,16 +86,10 @@ def add_parser(sub) -> None:
     p = ps.add_parser("import", help="install a carried directory (bundles/ and catalog/)")
     p.add_argument("dir", type=Path)
 
-    p = ps.add_parser("update", help="nightly: on a new Catalog release, build the new scores' "
-                                     "bundles into a store and notify (one cheap request "
-                                     "otherwise)")
-    p.add_argument("--store", type=Path, required=True,
-                   help="bundle store: release folders (each pgs-import-able) + refused.tsv")
-    p.add_argument("--max-new", type=int, default=300,
-                   help="build nothing and say so when a release brings more than this")
-    p.add_argument("--batch", type=int, default=40)
-    p.add_argument("--dry-run", action="store_true", help="report only; build and send nothing")
-    p.add_argument("--force", action="store_true", help="run even if the release is unchanged")
+    p = ps.add_parser("update", help="bring the scores you chose up to date with the Catalog: a "
+                                     "new catalog snapshot, re-harmonised files rebuilt and "
+                                     "re-scored, newer scores listed (network)")
+    p.add_argument("--dry-run", action="store_true", help="report only; download and compute nothing")
 
     ps.add_parser("status", help="every chosen result and whether it is current")
     ps.add_parser("check", help="upstream changes: re-harmonised files, newer scores (network)")
@@ -314,12 +308,12 @@ def run(args, refresh_pages=None) -> int:
         return 1 if out["refused"] else 0
     if cmd == "update":
         from . import pgs_update
-        out = pgs_update.update(args.store, args.max_new, args.batch, args.dry_run, args.force)
-        if not out["changed"] and not args.force:
-            print(f"release {out['previous']} unchanged")
-            return 0
-        print(out.get("message") or pgs_update.summary(out))
-        return 1 if out["failed"] else 0
+        out = pgs_update.update(args.dry_run)
+        print(out["message"])
+        failed = (out["rescored"] or {}).get("failed") or []
+        for cs, pid, err in failed:
+            print(f"  FAILED {pid} → {cs}: {err}")
+        return 1 if failed else 0
     if cmd == "status":
         rows = pgs_chosen.status()
         if not rows:
