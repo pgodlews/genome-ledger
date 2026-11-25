@@ -381,8 +381,15 @@ def fetch(pids: list[str], to: Path | None = None, refresh: bool = False,
                          "machine and `pgs import` the bundles here.")
     require_tools("bcftools")
     if batch > 1:
-        _reference_batches(pids, to, refresh, batch)
-        refresh = False          # done above; the loop below must not discard what it built
+        # Window by window: build a few batches' reference data, then write those bundles,
+        # so results appear (and can be carried off) as the run goes instead of all at the end.
+        window = batch * 4
+        done = []
+        for i in range(0, len(pids), window):
+            part = pids[i:i + window]
+            _reference_batches(part, to, refresh, batch)
+            done += fetch(part, to, False, prune, 1, link)
+        return done
     done = []
     for pid in pids:
         if to and not refresh:

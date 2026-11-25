@@ -520,6 +520,19 @@ def test_select_and_resume() -> None:
         prs._scoring_file = saved
     check("an intact bundle already written is skipped, not rebuilt",
           done == [PID_A] and calls == [])
+    order = []
+    saved = (pgs_chosen._reference_batches, pgs_chosen.write_bundle)
+    pgs_chosen._reference_batches = lambda part, to, refresh, size: order.append(("ref", list(part)))
+    pgs_chosen.write_bundle = lambda pid, to, link=False: order.append(("bundle", pid)) or saved[1](pid, to, link)
+    try:
+        many = [PID_A, PID_B] * 5                       # 10 ids, batch 2 → windows of 8
+        pgs_chosen.fetch(many, ROOT / "carry5", batch=2)
+    finally:
+        pgs_chosen._reference_batches, pgs_chosen.write_bundle = saved
+    firsts = [i for i, (kind, _x) in enumerate(order) if kind == "bundle"]
+    refs = [i for i, (kind, _x) in enumerate(order) if kind == "ref"]
+    check(f"batched fetch writes bundles window by window (order {[k for k, _ in order]})",
+          len(refs) == 2 and firsts and firsts[0] < refs[1])
     linked = pgs_chosen.write_bundle(PID_A, ROOT / "carry3", link=True)
     check("--link hard-links bundle files to the cache",
           (linked / f"{PID_A}_hmPOS_GRCh38.txt.gz").stat().st_ino
