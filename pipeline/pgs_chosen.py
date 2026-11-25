@@ -140,17 +140,34 @@ def engine_problem(pid: str) -> str | None:
     why = pgs_catalog.unsupported(h.get("weight_type"))
     if why:
         return why
+    # The columns alone prove nothing: the Catalog's format carries them on ordinary additive
+    # scores too, every row FALSE or blank. Refusing on their presence turned away scorable
+    # scores (PGS004869-4886 carry is_interaction on every row, all FALSE). What the engine
+    # cannot model is a row that IS a haplotype, diplotype or interaction, or a weight per
+    # dosage, so the file is read until one is found.
+    flags = ("is_haplotype", "is_diplotype", "is_interaction")
+    dosage = ("dosage_0_weight", "dosage_1_weight", "dosage_2_weight")
     with gzip.open(path, "rt") as fh:
+        header = None
         for line in fh:
-            if not line.startswith("#"):
-                cols = set(line.rstrip("\n").split("\t"))
-                break
-        else:
+            if line.startswith("#"):
+                continue
+            f = line.rstrip("\n").split("\t")
+            if header is None:
+                header = {c: i for i, c in enumerate(f)}
+                flag_cols = [(c, header[c]) for c in flags if c in header]
+                dose_cols = [(c, header[c]) for c in dosage if c in header]
+                if not flag_cols and not dose_cols:
+                    return None
+                continue
+            for c, i in flag_cols:
+                if i < len(f) and f[i].strip().lower() in ("true", "t", "1", "yes"):
+                    return f"has {c} rows, which this engine does not model"
+            for c, i in dose_cols:
+                if i < len(f) and f[i].strip() not in ("", "NA", "nan"):
+                    return f"uses per-dosage weights ({c}), which this engine does not model"
+        if header is None:
             return "no column header"
-    special = sorted(cols & {"dosage_0_weight", "dosage_1_weight", "dosage_2_weight",
-                             "is_haplotype", "is_diplotype", "is_interaction"})
-    if special:
-        return f"uses {', '.join(special)}, which this engine does not model"
     return None
 
 

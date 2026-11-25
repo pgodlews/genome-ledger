@@ -489,6 +489,20 @@ def test_unsupported() -> None:
                  "A\tG\t0.1\t1\t100\t0\t0.1\t0.3\n")
     check("per-dosage weight columns are found in the file",
           "dosage_0_weight" in (pgs_chosen.engine_problem(pid) or ""))
+    p2 = pgs_chosen.scoring_path("PGS999005")
+    with gzip.open(p2, "wt") as fh:
+        fh.write("#pgs_id=PGS999005\n#trait_efo=" + TRAIT_A + "\n#weight_type=beta\n"
+                 "effect_allele\tother_allele\teffect_weight\thm_chr\thm_pos\tis_interaction"
+                 "\tis_haplotype\tdosage_0_weight\n"
+                 "A\tG\t0.1\t1\t100\tFALSE\tFALSE\t\nT\tC\t0.2\t1\t150\tFALSE\t\t\n")
+    check("the columns present but every row FALSE or blank: an ordinary additive score",
+          pgs_chosen.engine_problem("PGS999005") is None)
+    p3 = pgs_chosen.scoring_path("PGS999006")
+    with gzip.open(p3, "wt") as fh:
+        fh.write("#pgs_id=PGS999006\n#trait_efo=" + TRAIT_A + "\n#weight_type=beta\n"
+                 "effect_allele\tother_allele\teffect_weight\thm_chr\thm_pos\tis_haplotype\n"
+                 "A\tG\t0.1\t1\t100\tFALSE\nT\tC\t0.2\t1\t150\tTRUE\n")
+    check("one TRUE haplotype row is refused", "is_haplotype" in (pgs_chosen.engine_problem("PGS999006") or ""))
     pgs_chosen.set_score_consent("Maria", pid, True)
     out = pgs_chosen.score([pid], ["Maria"])
     check("…and refused at scoring with that reason", out["scored"] == []
