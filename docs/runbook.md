@@ -257,6 +257,21 @@ log warns about a new epoch and old scores are kept but rescored over the next r
 Recalibrate afterwards. DELTA lists bands that changed because of the model separately,
 as log-only.
 
+## Recipe: a polygenic score that is not in the panel
+
+Search the whole PGS Catalog, tick who it may be computed for, and score. See
+[pgs-chosen.md](pgs-chosen.md) for the full guide, including air-gapped machines.
+
+1. Once, on a connected machine: `uv run python run.py pgs sync`.
+2. Find it: `uv run python run.py pgs search "<trait>"`, then `pgs show <PGS id>`.
+3. Consent: `uv run python run.py pgs consent <PGS id>` shows the family matrix and asks who
+   to tick. Nothing is computed for anyone left unticked.
+4. Score: `uv run python run.py pgs score <PGS id>`. The result is on the person's dashboard
+   as *Polygenic scores you chose*.
+
+Or run `uv run python run.py serve` and open `/pgs/` for the same steps in a browser.
+Withdrawing consent (`pgs consent <PGS id> --revoke <name>`) deletes the result.
+
 ## Running unattended (long jobs)
 
 Calling a whole genome takes hours. Run it **detached** so it survives the terminal

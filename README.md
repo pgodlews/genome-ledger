@@ -126,6 +126,7 @@ never in git).
 | [`docs/report-formats.md`](docs/report-formats.md) | Where reports live, what every report file looks like, how to add a report or an output format |
 | [`docs/hardware-and-scope.md`](docs/hardware-and-scope.md) | Which files unlock which features, hardware profiles, legal framing, the consent filter |
 | [`docs/prs-guide.md`](docs/prs-guide.md) | The polygenic scores in the panel and how to add one |
+| [`docs/pgs-chosen.md`](docs/pgs-chosen.md) | Choosing any score from the PGS Catalog: consent per trait, bundles for air-gapped machines, keeping results current |
 | [`docs/prs-architecture.md`](docs/prs-architecture.md) · [`docs/polygenic-panel-design.md`](docs/polygenic-panel-design.md) | How polygenic scoring works, and why these traits |
 | [`docs/stewardship-and-succession.md`](docs/stewardship-and-succession.md) | Keeping a family's genomes usable for decades: backups, formats, handover, ethics |
 
@@ -291,6 +292,7 @@ Available: `de_novo`, `recessive`, `compound_het`, `x_linked`, `segregation`.
 | `hla` | HLA risk (B27, celiac) via tag SNPs for a sample |
 | `hla-type` | full classical HLA typing (T1K, in Docker) from a sample's CRAM; set `HLA_TYPE_TMP` to put its temporary reads on a larger disk |
 | `prs` | polygenic risk scores (PGS Catalog) for a sample — [which scores, and how to add one](docs/prs-guide.md) |
+| `pgs` | polygenic scores you choose from the whole PGS Catalog: search offline, a consent matrix per person and trait, bundles for air-gapped machines, a picker at `/pgs/` on `serve` — [guide](docs/pgs-chosen.md) |
 | `force-call` | genotype the fixed positions that `traits`, `hla` and small `prs` scores look up, from the reads — [why and when](docs/runbook.md#recipe-force-calling--making-not-in-the-vcf-mean-something) |
 | `repeats` | repeat-expansion report (ExpansionHunter) for a sample |
 | `sv` | structural-variant / CNV report (Manta) for a sample |
