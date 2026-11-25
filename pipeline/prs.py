@@ -421,6 +421,12 @@ def _reference_freqs(pid: str, variants) -> dict[tuple[str, str], tuple]:
         log.warning("  1000G AF query reported an error for chr%s — cache NOT written "
                     "(a non-zero exit can still have emitted rows).", ", chr".join(failed))
         return freqs
+    # Zero rows from a LOCAL copy that bcftools read without error is an answer: none of those
+    # positions is in 1000 Genomes (a score can carry a handful of variants 1000G never saw).
+    # Only a remote read can come back empty because the connection failed, so only those are
+    # treated as incomplete. Refusing the local case left such a score uncacheable for ever,
+    # re-queried on every run and impossible to carry to an offline machine.
+    incomplete = [c for c in incomplete if not Path(config.kg_vcf_source(c)).is_file()]
     if incomplete:
         # Don't cache a partial result as if complete — every later run would read the
         # truncated cache and silently calibrate against a subset of the score's variants,

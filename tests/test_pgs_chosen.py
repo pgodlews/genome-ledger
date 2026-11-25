@@ -661,9 +661,31 @@ def test_batching_is_machine_aware() -> None:
     check(f"only the genome-wide one without reference data (got {got})", got == ["NEED"])
 
 
+def test_local_zero_rows_are_an_answer() -> None:
+    print("a chromosome with none of the score's positions in a LOCAL 1000G copy is cached:")
+    kg = config.KG_VCF_LOCAL_DIR
+    kg.mkdir(parents=True, exist_ok=True)
+    for chrom, rows in (("1", "chr1\t100\t.\tA\tG\t.\tPASS\tAF=0.3;AF_EUR=0.2\n"),
+                        ("2", "")):
+        raw = kg / f"af{chrom}.vcf"
+        raw.write_text("##fileformat=VCFv4.2\n" + f"##contig=<ID=chr{chrom}>\n"
+                       '##INFO=<ID=AF,Number=A,Type=Float,Description="a">\n'
+                       '##INFO=<ID=AF_EUR,Number=A,Type=Float,Description="e">\n'
+                       "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n" + rows)
+        out = kg / f"chr{chrom}.vcf.gz"
+        subprocess.run(["bcftools", "view", "-Oz", "-o", str(out), str(raw)], check=True)
+        subprocess.run(["tabix", "-f", "-p", "vcf", str(out)], check=True)
+    pid = "PGS999301"
+    prs._kg_cache(pid).unlink(missing_ok=True)
+    freqs = prs._reference_freqs(pid, [("1", "100", "G", "A", 1.0), ("2", "500", "T", "C", 1.0)])
+    check("the position that exists is found", ("1", "100") in freqs)
+    check("…and the cache is written although chr2 had none of the positions",
+          prs._kg_cache(pid).exists() and prs._kg_cache(pid).stat().st_size > 0)
+
+
 TESTS = [test_covariates, test_catalog_summary, test_gate_before_download, test_consent_and_score,
          test_withdrawal_deletes, test_stale, test_bundle_roundtrip, test_offline,
-         test_ref_table, test_remote_header, test_unsupported, test_select_and_resume, test_batch_equals_per_score, test_batching_is_machine_aware, test_web]
+         test_ref_table, test_remote_header, test_unsupported, test_select_and_resume, test_batch_equals_per_score, test_batching_is_machine_aware, test_local_zero_rows_are_an_answer, test_web]
 
 
 def main() -> int:
