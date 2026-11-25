@@ -331,12 +331,6 @@ def _prune(pid: str) -> int:
 
 
 fetch_errors: dict[str, str] = {}     # why the last fetch of each id failed, for callers
-BATCH_MAX_ROWS = 60_000_000          # variant rows held in memory for one reference batch
-# Distinct positions in one batch. Everything a batch costs beyond its one read of each 1000G
-# chromosome grows with this union: the extract, the panel, and every member's plink2 pass
-# over the panel's site list. Scores on the same sites (one publication's set) share it
-# almost entirely; unrelated ones add up, so the batch is closed before it balloons.
-BATCH_MAX_UNION = 15_000_000
 
 
 def _bundle_done(pid: str, to: Path | None) -> bool:
@@ -347,55 +341,32 @@ def _bundle_done(pid: str, to: Path | None) -> bool:
 
 
 def _reference_batches(pids: list[str], to: Path | None, refresh: bool, size: int) -> None:
-    """Build the reference data of the genome-wide scores in `pids` in batches of `size`
-    (prs.reference_scores_batch), so each 1000G chromosome is read once per batch instead of
+    """Build the reference data of the genome-wide scores in `pids` in batches
+    (prs.prebuild_references), so each 1000G chromosome is read once per batch instead of
     once per score. The per-score loop in fetch then finds the caches and writes bundles."""
-    batch: dict[str, list] = {}
-    rows = 0
-    union: set = set()
-
-    def run(batch):
-        import hashlib
-        key = hashlib.sha256(",".join(sorted(batch)).encode()).hexdigest()[:12]
-        wd = config.PGS_DIR / f".batch-{key}"
-        try:
-            done = prs.reference_scores_batch(batch, wd)
-            log.info("batch %s: reference data for %d of %d score(s).", key, len(done),
-                     len(batch))
-        finally:
-            shutil.rmtree(wd, ignore_errors=True)
-
-    for pid in pids:
-        if _bundle_done(pid, to) and not refresh:
-            continue
-        try:
-            if refresh:
-                for f in [scoring_path(pid), prs._kg_cache(pid)]:
-                    f.unlink(missing_ok=True)
-                shutil.rmtree(kg_dir(pid), ignore_errors=True)
-            prs._scoring_file(pid)
-            if engine_problem(pid):
+    def todo():
+        for pid in pids:
+            if _bundle_done(pid, to) and not refresh:
                 continue
-            variants = prs._load_variants(scoring_path(pid))
-        except Exception as e:  # noqa: BLE001 — the per-score loop reports it
-            log.warning("%s: not batched (%s)", pid, e)
-            continue
-        if len(variants) <= config.PRS_PLINK_MIN:
-            continue
-        d = kg_dir(pid)
-        if (d / "scores_all.tsv").exists() and prs.ref_table(d).exists():
-            continue
-        auto = prs._autosomal(variants)
-        sites = {(v[0], v[1]) for v in auto}
-        if batch and (len(batch) >= size or rows + len(auto) > BATCH_MAX_ROWS
-                      or len(union | sites) > BATCH_MAX_UNION):
-            run(batch)
-            batch, rows, union = {}, 0, set()
-        batch[pid] = auto
-        rows += len(auto)
-        union |= sites
-    if batch:
-        run(batch)
+            try:
+                if refresh:
+                    for f in [scoring_path(pid), prs._kg_cache(pid)]:
+                        f.unlink(missing_ok=True)
+                    shutil.rmtree(kg_dir(pid), ignore_errors=True)
+                prs._scoring_file(pid)
+                if engine_problem(pid):
+                    continue
+                variants = prs._load_variants(scoring_path(pid))
+            except Exception as e:  # noqa: BLE001 — the per-score loop reports it
+                log.warning("%s: not batched (%s)", pid, e)
+                continue
+            if len(variants) <= config.PRS_PLINK_MIN:
+                continue
+            d = kg_dir(pid)
+            if (d / "scores_all.tsv").exists() and prs.ref_table(d).exists():
+                continue
+            yield pid, prs._autosomal(variants)
+    prs.prebuild_references(todo(), size)
 
 
 def fetch(pids: list[str], to: Path | None = None, refresh: bool = False,

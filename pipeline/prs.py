@@ -668,6 +668,92 @@ def _kg_population_map() -> dict[str, str]:
     return out
 
 
+def _total_ram() -> int:
+    """Physical memory in bytes (0 if the platform will not say)."""
+    try:
+        return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+    except (ValueError, OSError, AttributeError):
+        return 0
+
+
+def _plink2_share() -> list[str]:
+    """--threads/--memory for one of the PRS_REF_WORKERS plink2 runs that go at once.
+
+    Left to itself every plink2 takes all cores and reserves half the RAM, so eight
+    concurrent chromosome workers asked for eight machines' worth. Each now gets its share."""
+    workers = max(1, config.PRS_REF_WORKERS)
+    threads = max(1, (os.cpu_count() or 2) // workers)
+    ram_mb = _total_ram() // (1 << 20)
+    args = ["--threads", str(threads)]
+    if ram_mb:
+        args += ["--memory", str(max(512, ram_mb // (2 * workers)))]
+    return args
+
+
+# Bytes a batch costs per variant row held in Python (a 5-tuple of short strings and a float)
+# and per distinct position in its 1000G panel on disk (3,202 genotypes at 2 bits, the .pvar
+# line, and the transient extract). Measured orders of magnitude, used only to size batches.
+_BATCH_BYTES_PER_ROW = 200
+_BATCH_DISK_PER_SITE = 1500
+
+
+def batch_limits(workdir: Path) -> tuple[int, int]:
+    """(max variant rows, max distinct positions) for one reference batch on this machine.
+
+    A quarter of physical RAM for the rows (two shards and the OS share the rest), and half
+    the free disk under `workdir` for the panel, each capped at the defaults that suit a
+    large build box. PRS_BATCH_MAX_ROWS / PRS_BATCH_MAX_UNION override either."""
+    ram = _total_ram()
+    rows = min(config.PRS_BATCH_MAX_ROWS, ram // 4 // _BATCH_BYTES_PER_ROW) if ram \
+        else config.PRS_BATCH_MAX_ROWS
+    probe = workdir
+    while not probe.exists() and probe != probe.parent:
+        probe = probe.parent
+    free = shutil.disk_usage(probe).free
+    union = min(config.PRS_BATCH_MAX_UNION, free // 2 // _BATCH_DISK_PER_SITE)
+    return max(rows, 1_000_000), max(union, 1_000_000)
+
+
+def prebuild_references(items, size: int | None = None) -> list[str]:
+    """Build the 1000G reference data of genome-wide scores in batches.
+
+    `items` yields (pid, autosomal variants), lazily, so only one batch is ever held in
+    memory. A batch closes at `size` scores (config.PRS_REF_BATCH), or before its rows or
+    its distinct positions pass this machine's `batch_limits`. Returns the pids built; a
+    score left out is simply built later by `_reference_scores` on its own."""
+    size = size or config.PRS_REF_BATCH
+    max_rows, max_union = batch_limits(config.PGS_DIR)
+    built: list[str] = []
+    batch: dict[str, list] = {}
+    rows, union = 0, set()
+
+    def run(batch):
+        key = hashlib.sha256(",".join(sorted(batch)).encode()).hexdigest()[:12]
+        wd = config.PGS_DIR / f".batch-{key}"
+        try:
+            done = reference_scores_batch(batch, wd)
+            built.extend(done)
+            log.info("Reference batch %s: %d of %d score(s) built.", key, len(done), len(batch))
+        except Exception as e:  # noqa: BLE001 — the per-score path still builds them
+            log.warning("Reference batch %s failed (%s); its scores fall back to one at a "
+                        "time.", key, e)
+        finally:
+            shutil.rmtree(wd, ignore_errors=True)
+
+    for pid, auto in items:
+        sites = {(v[0], v[1]) for v in auto}
+        if batch and (len(batch) >= size or rows + len(auto) > max_rows
+                      or len(union | sites) > max_union):
+            run(batch)
+            batch, rows, union = {}, 0, set()
+        batch[pid] = auto
+        rows += len(auto)
+        union |= sites
+    if batch:
+        run(batch)
+    return built
+
+
 def _kg_ref_pgen(chrom: str, chrom_vars, workdir: Path) -> Path | None:
     """Cached per-chromosome reference pgen of 1000G genotypes at the score's positions.
     Sample-independent → built once per PGS and reused for the whole family."""
@@ -723,7 +809,7 @@ def _kg_ref_pgen(chrom: str, chrom_vars, workdir: Path) -> Path | None:
     # back n/a, and the cleanup missed the real files too, leaking gigabytes of orphans. repeats.py
     # carries the same warning; this call site did not get the memo.
     ext_of = lambda e: workdir / f".build_chr{chrom}.{tag}{e}"
-    pp = subprocess.run([_plink2_bin(), "--vcf", str(subset), "--max-alleles", "2",
+    pp = subprocess.run([_plink2_bin(), *_plink2_share(), "--vcf", str(subset), "--max-alleles", "2",
                          "--set-all-var-ids", "@:#", "--rm-dup", "exclude-all",
                          "--make-pgen", "--out", str(build)],
                         capture_output=True, text=True)
@@ -812,7 +898,8 @@ def _score_reference(prefix: Path, chrom: str, chrom_vars, workdir: Path,
     op = workdir / f".sc_{label}_chr{chrom}.{os.getpid()}"
     sscore = Path(f"{op}.sscore")
     try:
-        pp = subprocess.run([_plink2_bin(), "--pfile", str(prefix), "--score", str(sf),
+        pp = subprocess.run([_plink2_bin(), *_plink2_share(), "--pfile", str(prefix),
+                             "--score", str(sf),
                              "1", "2", "3", "header", "cols=+scoresums", "no-mean-imputation",
                              "--out", str(op)], capture_output=True, text=True)
         if pp.returncode:
@@ -1523,6 +1610,8 @@ def prs_report(sample: str, force: bool = False) -> Path:
 
     panel, notes = _panel_filters(_panel_scores(), sample)
     log.info("PRS: %d trait(s) to score.", len(panel))
+    if config.PRS_GENOMEWIDE_PERCENTILE and config.PRS_REF_BATCH > 1:
+        _prebuild_panel(panel)
 
     rows, failures = [], []
     for entry in panel:
@@ -1540,6 +1629,30 @@ def prs_report(sample: str, force: bool = False) -> Path:
         raise SystemExit(f"every score in the panel failed ({len(failures)}); "
                          "see the warnings above.")
     return write_prs(sample, rows, notes, failures, forced)
+
+
+def _prebuild_panel(panel: list[dict]) -> None:
+    """Build the reference data of the panel's genome-wide scores that lack it, in batches
+    (prebuild_references), before scoring: on a fresh machine that is nearly all of a first
+    `prs` run. Anything this fails to build is built one score at a time as before."""
+    def todo():
+        for entry in panel:
+            pid = entry["pgs_id"]
+            n = int(entry["n_variants"]) if str(entry.get("n_variants") or "").isdigit() else 0
+            if n and n <= config.PRS_PLINK_MIN:
+                continue
+            if (config.PGS_DIR / f"{pid}_1kg" / "scores_all.tsv").exists():
+                continue
+            try:
+                variants = _load_variants(_scoring_file(pid))
+            except Exception as e:  # noqa: BLE001 — the per-score loop reports it
+                log.warning("  %s: not prebuilt (%s)", pid, e)
+                continue
+            if len(variants) > config.PRS_PLINK_MIN:
+                yield pid, _autosomal(variants)
+    built = prebuild_references(todo())
+    if built:
+        log.info("PRS: reference data built in batches for %d genome-wide score(s).", len(built))
 
 
 def write_prs(sample: str, rows: list[dict], notes: list[str],

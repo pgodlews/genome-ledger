@@ -600,9 +600,57 @@ def test_batch_equals_per_score() -> None:
               sorted(gzip.open(prs.ref_table(d), "rt").read().splitlines()) == per[pid][1])
 
 
+def test_batching_is_machine_aware() -> None:
+    print("batches close at the score, row and distinct-position limits; limits fit the machine:")
+    seen = []
+    saved = (prs.reference_scores_batch, config.PRS_BATCH_MAX_ROWS, config.PRS_BATCH_MAX_UNION)
+    prs.reference_scores_batch = lambda batch, wd: seen.append(sorted(batch)) or list(batch)
+    try:
+        config.PRS_BATCH_MAX_ROWS, config.PRS_BATCH_MAX_UNION = 10**9, 10**9
+        site = lambda c, p: (c, str(p), "A", "G", 1.0)
+        shared = [site("1", p) for p in range(1, 1001)]
+        items = [(f"S{i}", shared) for i in range(5)]           # five scores on one site set
+        built = prs.prebuild_references(iter(items), size=3)
+        check(f"closed at 3 scores (got {seen})", seen == [["S0", "S1", "S2"], ["S3", "S4"]]
+              and len(built) == 5)
+        seen.clear()
+        config.PRS_BATCH_MAX_UNION = 1_000_000                   # the floor batch_limits keeps
+        big = lambda k: [site("2", k * 10**6 + p) for p in range(600_000)]
+        prs.prebuild_references(iter([("B1", big(1)), ("B2", big(2)), ("B3", big(3))]), size=40)
+        check(f"unrelated large scores close the batch at the union cap (got {seen})",
+              seen == [["B1"], ["B2"], ["B3"]])
+    finally:
+        prs.reference_scores_batch, config.PRS_BATCH_MAX_ROWS, config.PRS_BATCH_MAX_UNION = saved
+    rows, union = prs.batch_limits(config.PGS_DIR)
+    check(f"limits are positive and no larger than the configured caps ({rows:,}, {union:,})",
+          1_000_000 <= rows <= config.PRS_BATCH_MAX_ROWS
+          and 1_000_000 <= union <= config.PRS_BATCH_MAX_UNION)
+    share = prs._plink2_share()
+    threads = int(share[share.index("--threads") + 1])
+    check(f"each plink2 gets its share of the cores ({share})",
+          1 <= threads <= max(1, (__import__("os").cpu_count() or 2) // max(1, config.PRS_REF_WORKERS)))
+
+    print("the panel stage prebuilds only genome-wide scores that lack reference data:")
+    got = []
+    saved = (prs.prebuild_references, prs._scoring_file, prs._load_variants)
+    prs.prebuild_references = lambda items, size=None: got.extend(p for p, _v in items) or []
+    prs._scoring_file = lambda pid: pid
+    prs._load_variants = lambda pid: [("1", str(i), "A", "G", 1.0)
+                                      for i in range(config.PRS_PLINK_MIN + (1 if pid != "SMALL" else -10))]
+    try:
+        (config.PGS_DIR / "HAVE_1kg").mkdir(parents=True, exist_ok=True)
+        (config.PGS_DIR / "HAVE_1kg" / "scores_all.tsv").write_text("x\ty\t1\n")
+        prs._prebuild_panel([{"pgs_id": "NEED", "n_variants": ""},
+                             {"pgs_id": "HAVE", "n_variants": "900000"},
+                             {"pgs_id": "SMALL", "n_variants": "40"}])
+    finally:
+        prs.prebuild_references, prs._scoring_file, prs._load_variants = saved
+    check(f"only the genome-wide one without reference data (got {got})", got == ["NEED"])
+
+
 TESTS = [test_covariates, test_catalog_summary, test_gate_before_download, test_consent_and_score,
          test_withdrawal_deletes, test_stale, test_bundle_roundtrip, test_offline,
-         test_ref_table, test_remote_header, test_unsupported, test_select_and_resume, test_batch_equals_per_score, test_web]
+         test_ref_table, test_remote_header, test_unsupported, test_select_and_resume, test_batch_equals_per_score, test_batching_is_machine_aware, test_web]
 
 
 def main() -> int:

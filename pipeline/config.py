@@ -255,6 +255,14 @@ PGS_DOWNLOAD_TIMEOUT = int(os.environ.get("PGS_DOWNLOAD_TIMEOUT", "300"))
 PRS_REF_WORKERS = int(os.environ.get("PRS_REF_WORKERS",
                                      max(1, min(22, (os.cpu_count() or 8) // 2))))
 PRS_BCFTOOLS_THREADS = int(os.environ.get("PRS_BCFTOOLS_THREADS", 2))
+# Genome-wide reference panels are built in batches (prs.prebuild_references): each 1000G
+# chromosome is read once per batch instead of once per score, which is nearly all of the
+# cost. A batch closes at this many scores, or earlier at the row and distinct-position caps
+# below, which prs.batch_limits lowers further to fit this machine's RAM and free disk.
+# PRS_REF_BATCH=1 builds one score at a time, as before.
+PRS_REF_BATCH = int(os.environ.get("PRS_REF_BATCH", 40))
+PRS_BATCH_MAX_ROWS = int(os.environ.get("PRS_BATCH_MAX_ROWS", 60_000_000))
+PRS_BATCH_MAX_UNION = int(os.environ.get("PRS_BATCH_MAX_UNION", 15_000_000))
 # Scatter by sub-chromosomal windows rather than whole contigs, so the slow,
 # repeat-rich chromosomes (chr16!) parallelize instead of leaving one core to grind
 # for hours at the tail. ~30Mb windows → ~110 shards across the genome.

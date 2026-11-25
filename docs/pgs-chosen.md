@@ -66,10 +66,23 @@ are marked `cannot score` and refused with the reason, instead of producing a wr
 
 | Score size | First time | Each further person |
 |---|---|---|
-| Small (≤ 50,000 variants) | minutes: 1000 Genomes frequencies at its positions | seconds |
-| Genome-wide | roughly 1–1.5 h: the score is computed for all 1000 Genomes individuals | minutes |
+| Small (≤ 50,000 variants) | seconds with a local 1000 Genomes copy (`run.py mirror-1kg`), minutes without | seconds |
+| Genome-wide | 10–15 min on its own; far less per score in a batch (below) | minutes |
 
 The reference work does not depend on the family. It is done once per score and reused.
+
+Almost all of a genome-wide score's reference build is reading each 1000 Genomes chromosome
+end to end, whatever positions are asked for. `pgs fetch --batch N` (and the panel's own `prs`
+stage, which batches automatically) reads each chromosome **once per batch** and then scores
+every member against that one panel. The result is the same as building each score alone; a
+test builds both ways and compares them.
+
+Batches are sized to the machine. A batch closes at `PRS_REF_BATCH` scores (default 40), or
+earlier before its variant rows or distinct positions pass what a quarter of the RAM and half
+the free disk allow (`PRS_BATCH_MAX_ROWS`, `PRS_BATCH_MAX_UNION` cap them further). Scores
+built on the same sites, typically one publication's, share almost all their positions, so
+listing ids in publication order makes batches cheap. Each parallel plink2 run gets its share
+of the cores and memory rather than all of them. `PRS_REF_BATCH=1` turns batching off.
 
 ## Air-gapped machines: bundles
 
@@ -79,7 +92,7 @@ depend on the family is built elsewhere and carried in.
 ```bash
 # On a connected machine. It needs no genomes: only public files are downloaded.
 uv run python run.py pgs sync --to /media/usb
-uv run python run.py pgs fetch PGS004606 PGS000040 --to /media/usb --prune
+uv run python run.py pgs fetch PGS004606 PGS000040 --to /media/usb --batch 40 --prune
 
 # On the air-gapped machine
 uv run python run.py pgs import /media/usb
