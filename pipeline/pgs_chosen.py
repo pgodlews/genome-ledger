@@ -346,6 +346,14 @@ def fetch(pids: list[str], to: Path | None = None, refresh: bool = False,
     require_tools("bcftools")
     done = []
     for pid in pids:
+        if to and not refresh:
+            b, problems = verify_bundle(Path(to) / "bundles" / pid)
+            if b and not problems:
+                # Resumable: a long fetch interrupted (a spot VM reclaimed) picks up where it
+                # stopped instead of rebuilding every reference panel it already finished.
+                log.info("%s: bundle already written and intact — skipped.", pid)
+                done.append(pid)
+                continue
         try:
             if refresh:
                 for f in [scoring_path(pid), prs._kg_cache(pid)]:

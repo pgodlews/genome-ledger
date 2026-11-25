@@ -36,6 +36,17 @@ def add_parser(sub) -> None:
     p.add_argument("--trait", metavar="EFO", help="list the scores for this trait id")
     p.add_argument("--limit", type=int, default=40)
 
+    p = ps.add_parser("list", help="score ids by category and evidence, one per line (for "
+                                   "`fetch --from-file`); a summary goes to stderr")
+    p.add_argument("--category", action="append", default=[],
+                   help="a trait category (repeatable); 'disease' = every disease, disorder and "
+                        "cancer category")
+    p.add_argument("--evidence", default="none", choices=pgs_catalog.EVIDENCE,
+                   help="european: a usable European evaluation; covariate-free: one without "
+                        "age/sex/clinical covariates")
+    p.add_argument("--engine", default="all", choices=["all", "small", "genome-wide"])
+    p.add_argument("--include-unsupported", action="store_true")
+
     p = ps.add_parser("show", help="one score: what it is and every published evaluation")
     p.add_argument("pgs_id")
 
@@ -187,6 +198,20 @@ def run(args, refresh_pages=None) -> int:
             print(f"… {len(traits) - args.limit} more; narrow the term or raise --limit")
         if not traits:
             print("no matching trait")
+        return 0
+    if cmd == "list":
+        cat = pgs_catalog.load()
+        cats = []
+        for c in args.category:
+            cats += list(pgs_catalog.DISEASE_CATEGORIES) if c.lower() == "disease" else [c]
+        ids = pgs_catalog.select(cat, cats or None, args.evidence, args.engine,
+                                 args.include_unsupported)
+        n = [cat.summary(p)["n_variants"] for p in ids]
+        gw = sum(1 for x in n if x > config.PRS_PLINK_MIN)
+        print("\n".join(ids))
+        print(f"{len(ids)} scores ({gw} genome-wide, {len(ids) - gw} small), "
+              f"{sum(n) / 1e6:,.0f}M variant rows — Catalog release {cat.release}",
+              file=sys.stderr)
         return 0
     if cmd == "show":
         cat = pgs_catalog.load()

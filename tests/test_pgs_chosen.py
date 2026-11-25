@@ -496,9 +496,35 @@ def test_unsupported() -> None:
     check("nothing was written", not pgs_chosen.result_path("Maria", pid).exists())
 
 
+def test_select_and_resume() -> None:
+    print("selecting ids for a long fetch, and resuming one:")
+    cat = pgs_catalog.load()
+    check("by category", set(pgs_catalog.select(cat, ["Invented category"])) == {PID_A, PID_AB, PID_B})
+    check("european evidence keeps all three (each has a usable European evaluation)",
+          set(pgs_catalog.select(cat, None, "european")) == {PID_A, PID_AB, PID_B})
+    check("covariate-free keeps only the score with such an evaluation",
+          pgs_catalog.select(cat, None, "covariate-free") == [PID_A])
+    try:
+        pgs_catalog.select(cat, ["No such category"])
+        check("an unknown category is refused", False)
+    except SystemExit:
+        check("an unknown category is refused", True)
+    carry = ROOT / "carry2"
+    pgs_chosen.write_bundle(PID_A, carry)
+    calls = []
+    saved = prs._scoring_file
+    prs._scoring_file = lambda pid: calls.append(pid) or saved(pid)
+    try:
+        done = pgs_chosen.fetch([PID_A], to=carry)
+    finally:
+        prs._scoring_file = saved
+    check("an intact bundle already written is skipped, not rebuilt",
+          done == [PID_A] and calls == [])
+
+
 TESTS = [test_covariates, test_catalog_summary, test_gate_before_download, test_consent_and_score,
          test_withdrawal_deletes, test_stale, test_bundle_roundtrip, test_offline,
-         test_ref_table, test_remote_header, test_unsupported, test_web]
+         test_ref_table, test_remote_header, test_unsupported, test_select_and_resume, test_web]
 
 
 def main() -> int:

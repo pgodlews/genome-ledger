@@ -404,6 +404,46 @@ def unsupported(weight_type: str | None, interaction_terms: int = 0) -> str | No
     return None
 
 
+DISEASE_CATEGORIES = ("Cancer", "Cardiovascular disease", "Digestive system disorder",
+                      "Immune system disorder", "Metabolic disorder", "Neurological disorder",
+                      "Other disease")
+EVIDENCE = ("none", "european", "covariate-free")
+
+
+def select(cat: "Catalog", categories: list[str] | None = None, evidence: str = "none",
+           engine: str = "all", include_unsupported: bool = False) -> list[str]:
+    """Score ids by trait category, published evidence and size, for `pgs fetch --from-file`.
+
+    evidence: `european` keeps scores with a usable European evaluation (the performance
+    summary is not empty); `covariate-free` keeps those whose summary is covariate-free.
+    Scores the additive engine cannot model are left out unless asked for."""
+    if evidence not in EVIDENCE:
+        raise SystemExit(f"--evidence is one of {', '.join(EVIDENCE)}")
+    if categories:
+        unknown = [c for c in categories if c not in cat.category_traits]
+        if unknown:
+            raise SystemExit(f"unknown categor{'y' if len(unknown) == 1 else 'ies'}: "
+                             f"{', '.join(unknown)} (known: {', '.join(sorted(cat.category_traits))})")
+        pids = {p for c in categories for e in cat.category_traits[c]
+                for p in cat.by_trait.get(e, [])}
+    else:
+        pids = set(cat.scores)
+    out = []
+    for pid in sorted(pids):
+        s = cat.summary(pid)
+        if s["unsupported"] and not include_unsupported:
+            continue
+        if engine != "all" and s["engine"] != {"small": "exact", "genome-wide": "plink2"}[engine]:
+            continue
+        perf = s["performance"]
+        if evidence == "european" and not perf:
+            continue
+        if evidence == "covariate-free" and perf.get("basis") != "covariate-free":
+            continue
+        out.append(pid)
+    return out
+
+
 def label_starts(label: str, q: str) -> bool:
     return bool(q) and label.lower().startswith(q)
 
