@@ -23,7 +23,8 @@ reclassified from "uncertain" to "pathogenic" next year doesn't go unnoticed.
 
 - **Family-aware:** reads the pedigree, shows who carries what and from whom, flags carrier
   couples, compound heterozygotes and de-novo candidates (confirmed against the parents' reads).
-- **More than ClinVar:** ACMG-style reasoning, polygenic scores calibrated against 1000 Genomes,
+- **More than ClinVar:** ACMG-style reasoning, polygenic scores calibrated against 1000 Genomes
+  (a curated panel, or any of ~7,000 PGS Catalog scores, computed only with each person's consent),
   pharmacogenomics, HLA, repeat expansions, structural variants and mtDNA.
 - **Private by design:** runs on your own Mac or Linux machine; incidental findings are opt-in
   per person; `share` writes clean copies of a VCF or CRAM for handing to a doctor. The one
@@ -292,7 +293,7 @@ Available: `de_novo`, `recessive`, `compound_het`, `x_linked`, `segregation`.
 | `hla` | HLA risk (B27, celiac) via tag SNPs for a sample |
 | `hla-type` | full classical HLA typing (T1K, in Docker) from a sample's CRAM; set `HLA_TYPE_TMP` to put its temporary reads on a larger disk |
 | `prs` | polygenic risk scores (PGS Catalog) for a sample — [which scores, and how to add one](docs/prs-guide.md) |
-| `pgs` | polygenic scores you choose from the whole PGS Catalog: search offline, a consent matrix per person and trait, bundles for air-gapped machines, a picker at `/pgs/` on `serve` — [guide](docs/pgs-chosen.md) |
+| `pgs` | polygenic scores you choose from the whole PGS Catalog: search offline, a consent matrix per person and trait, bundles for air-gapped machines, a picker at `/pgs/` on `serve`; `pgs update` brings the scores you chose up to date with new Catalog releases — [guide](docs/pgs-chosen.md) |
 | `force-call` | genotype the fixed positions that `traits`, `hla` and small `prs` scores look up, from the reads — [why and when](docs/runbook.md#recipe-force-calling--making-not-in-the-vcf-mean-something) |
 | `repeats` | repeat-expansion report (ExpansionHunter) for a sample |
 | `sv` | structural-variant / CNV report (Manta) for a sample |
