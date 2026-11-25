@@ -522,9 +522,82 @@ def test_select_and_resume() -> None:
           done == [PID_A] and calls == [])
 
 
+def test_batch_equals_per_score() -> None:
+    print("one pass for a batch gives each score exactly its per-score reference data:")
+    import random
+    import shutil
+    if not (list(config.PLINK2_DIR.glob("plink2")) or shutil.which("plink2")):
+        print("  SKIP  plink2 not available here")
+        return
+    rnd = random.Random(11)
+    kg = config.KG_VCF_LOCAL_DIR
+    kg.mkdir(parents=True, exist_ok=True)
+    samples = [f"HG{i:05d}" for i in range(40)]
+    config.KG_PANEL_FILE.parent.mkdir(parents=True, exist_ok=True)
+    config.KG_PANEL_FILE.write_text("SampleID\tSex\tBiosample\tPopulation\tPopName\t"
+                                    "Superpopulation\n" + "".join(
+                                        f"{s}\t1\tx\tP\tp\t{'EUR' if i % 2 else 'AFR'}\n"
+                                        for i, s in enumerate(samples)))
+    sites: dict[str, list] = {}
+    for chrom in ("1", "2"):
+        rows, pos = [], 1000
+        for i in range(300):
+            pos += rnd.randint(5, 50)
+            ref, alt = rnd.sample("ACGT", 2)
+            if i == 50:                       # a multi-allelic record: --max-alleles 2 drops it
+                alt = alt + "," + next(b for b in "ACGT" if b not in (ref, alt))
+            gts = ["|".join(rnd.choice("01") for _ in range(2)) for _ in samples]
+            rows.append((pos, ref, alt, gts))
+            if i == 80:                       # two records at one position: --rm-dup drops both
+                rows.append((pos, ref, next(b for b in "ACGT" if b not in (ref, alt)), gts))
+        sites[chrom] = rows
+        raw = kg / f"chr{chrom}.raw.vcf"
+        raw.write_text("##fileformat=VCFv4.2\n" + f"##contig=<ID=chr{chrom}>\n"
+                       + '##FORMAT=<ID=GT,Number=1,Type=String,Description="g">\n'
+                       + "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\t"
+                       + "\t".join(samples) + "\n"
+                       + "".join(f"chr{chrom}\t{p}\t.\t{r}\t{a}\t.\tPASS\t.\tGT\t"
+                                 + "\t".join(g) + "\n" for p, r, a, g in rows))
+        out = kg / f"chr{chrom}.vcf.gz"
+        subprocess.run(["bcftools", "view", "-Oz", "-o", str(out), str(raw)], check=True)
+        subprocess.run(["tabix", "-f", "-p", "vcf", str(out)], check=True)
+
+    def score(n, offset):
+        out = []
+        for chrom, rows in sites.items():
+            for p, ref, alt, _g in rows[offset:offset + n]:
+                a1 = alt.split(",")[0]
+                out.append((chrom, str(p), rnd.choice([ref, a1]), a1, round(rnd.uniform(-1, 1), 4)))
+        return out
+    scores = {"PGS999201": score(150, 0), "PGS999202": score(120, 40),   # overlaps the first
+              "PGS999203": score(60, 220)}
+    per = {}
+    for pid, vs in scores.items():
+        shutil.rmtree(config.PGS_DIR / f"{pid}_1kg", ignore_errors=True)
+        ref = prs._reference_scores(pid, vs)
+        table = prs.export_ref_table(pid, vs)
+        per[pid] = ({iid: sc for iid, sc in
+                     ((l.split("\t")[0], float(l.split("\t")[2])) for l in
+                      (config.PGS_DIR / f"{pid}_1kg" / "scores_all.tsv").read_text().splitlines())},
+                    sorted(gzip.open(table, "rt").read().splitlines()))
+        check(f"{pid}: per-score reference built", ref is not None and len(per[pid][0]) == 40)
+        shutil.rmtree(config.PGS_DIR / f"{pid}_1kg")
+    done = prs.reference_scores_batch(scores, config.PGS_DIR / ".batch-test")
+    check("the batch completes every score", sorted(done) == sorted(scores))
+    for pid in scores:
+        d = config.PGS_DIR / f"{pid}_1kg"
+        got = {l.split("\t")[0]: float(l.split("\t")[2])
+               for l in (d / "scores_all.tsv").read_text().splitlines()}
+        same = got.keys() == per[pid][0].keys() and all(
+            abs(got[k] - per[pid][0][k]) < 1e-9 for k in got)
+        check(f"{pid}: reference scores equal the per-score build", same)
+        check(f"{pid}: REF table equals the per-score build",
+              sorted(gzip.open(prs.ref_table(d), "rt").read().splitlines()) == per[pid][1])
+
+
 TESTS = [test_covariates, test_catalog_summary, test_gate_before_download, test_consent_and_score,
          test_withdrawal_deletes, test_stale, test_bundle_roundtrip, test_offline,
-         test_ref_table, test_remote_header, test_unsupported, test_select_and_resume, test_web]
+         test_ref_table, test_remote_header, test_unsupported, test_select_and_resume, test_batch_equals_per_score, test_web]
 
 
 def main() -> int:

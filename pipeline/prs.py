@@ -798,9 +798,18 @@ def _ref_score_chrom(chrom: str, chrom_vars, workdir: Path):
     prefix = _kg_ref_pgen(chrom, chrom_vars, workdir)
     if prefix is None:
         return chrom, None
-    sf = workdir / f".score_all_chr{chrom}.{os.getpid()}.txt"
+    return chrom, _score_reference(prefix, chrom, chrom_vars, workdir, "all")
+
+
+def _score_reference(prefix: Path, chrom: str, chrom_vars, workdir: Path,
+                     label: str) -> dict[str, float] | None:
+    """{iid: score} for every reference individual in the pgen at `prefix`, over these
+    variants on this chromosome, or None if plink2 produced nothing usable. The pgen may hold
+    more sites than the score uses (a batch panel, see reference_scores_batch): plink2 --score
+    reads only the IDs in the score file, so the extra sites change nothing."""
+    sf = workdir / f".score_{label}_chr{chrom}.{os.getpid()}.txt"
     _write_score_file(sf, chrom_vars)
-    op = workdir / f".sc_all_chr{chrom}.{os.getpid()}"
+    op = workdir / f".sc_{label}_chr{chrom}.{os.getpid()}"
     sscore = Path(f"{op}.sscore")
     try:
         pp = subprocess.run([_plink2_bin(), "--pfile", str(prefix), "--score", str(sf),
@@ -812,19 +821,19 @@ def _ref_score_chrom(chrom: str, chrom_vars, workdir: Path):
             # the percentile, it inflates it. Treat the chromosome as missing.
             log.warning("  plink2 reference scoring chr%s rc=%s: %s", chrom, pp.returncode,
                         " ".join(pp.stderr.split())[:200])
-            return chrom, None
+            return None
         rows = sscore.read_text().splitlines() if sscore.exists() else []
         hdr = {c: i for i, c in enumerate(rows[0].lstrip("#").split("\t"))} if rows else {}
         ii, si = hdr.get("IID"), hdr.get("SCORE1_SUM")
         if ii is None or si is None:
             # plink2 can exit 0 having produced nothing usable; such a chromosome used to
             # just vanish from the sums.
-            return chrom, None
+            return None
         out = {}
         for r in rows[1:]:
             f = r.split("\t")
             out[f[ii]] = float(f[si])
-        return chrom, out
+        return out
     finally:
         sscore.unlink(missing_ok=True)
         Path(f"{op}.log").unlink(missing_ok=True)
@@ -890,6 +899,76 @@ def _reference_scores(pid: str, variants) -> list[tuple[str, float]] | None:
                             for iid, s in totals.items() if iid in popmap))
     os.replace(ctmp, cache)
     return result
+
+
+def reference_scores_batch(batch: dict[str, list], workdir: Path) -> list[str]:
+    """Build the 1000G reference scores and REF tables of several genome-wide scores at once.
+
+    `_reference_scores` extracts each chromosome from 1000G once PER SCORE, and that streaming
+    read of the whole chromosome (bcftools -T reads the file end to end whatever the number of
+    positions) is nearly all of its time: ~12 min for a 1.7M-variant score and ~15 min for a
+    7M one, measured on 32 vCPU. Here each chromosome is extracted once for the UNION of the
+    batch's positions, and every score is then scored against that one panel.
+
+    The result is the same as building each score alone. bcftools -T selects records by
+    position; --max-alleles 2 acts per record and --rm-dup exclude-all per position, so at
+    every position a score uses the batch panel holds exactly the records that score's own
+    panel would. plink2 --score reads only the IDs in the score's file, and the REF table
+    is read from the same records. Each score's outputs go to its own {pid}_1kg/ cache as
+    `_reference_scores` and `export_ref_table` would write them. A score with a chromosome
+    that failed gets nothing cached, the same rule as there.
+
+    `batch` maps pid → its autosomal variants. Returns the pids completed."""
+    popmap = _kg_population_map()
+    if not popmap or not batch:
+        return []
+    workdir.mkdir(parents=True, exist_ok=True)
+    per_chrom: dict[str, dict[str, list]] = defaultdict(dict)
+    for pid, variants in batch.items():
+        for v in variants:
+            per_chrom[v[0]].setdefault(pid, []).append(v)
+    chroms = sorted(per_chrom, key=lambda c: int(c) if c.isdigit() else 99)
+    log.info("  1000G reference panel for a batch of %d score(s): %d chromosome(s), %d in "
+             "parallel.", len(batch), len(chroms), max(1, min(config.PRS_REF_WORKERS, len(chroms))))
+
+    def one_chrom(chrom):
+        union = sorted({(c, p) for vs in per_chrom[chrom].values() for c, p, *_ in vs},
+                       key=lambda cp: int(cp[1]))
+        prefix = _kg_ref_pgen(chrom, union, workdir)
+        if prefix is None:
+            return chrom, None
+        return chrom, {pid: _score_reference(prefix, chrom, vs, workdir, pid)
+                       for pid, vs in per_chrom[chrom].items()}
+
+    totals: dict[str, dict[str, float]] = {pid: defaultdict(float) for pid in batch}
+    failed: set[str] = set()
+    workers = max(1, min(config.PRS_REF_WORKERS, len(chroms)))
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        for fut in as_completed([ex.submit(one_chrom, c) for c in chroms]):
+            chrom, got = fut.result()
+            for pid in per_chrom[chrom]:
+                scores = got.get(pid) if got else None
+                if scores is None:
+                    failed.add(pid)
+                    continue
+                for iid, sc in scores.items():
+                    totals[pid][iid] += sc
+    done = [pid for pid in batch if pid not in failed and totals[pid]]
+    if failed:
+        log.warning("  batch: %d score(s) lost a chromosome and get no reference scores: %s",
+                    len(failed), ", ".join(sorted(failed)))
+    for pid in done:
+        d = config.PGS_DIR / f"{pid}_1kg"
+        d.mkdir(parents=True, exist_ok=True)
+        cache = d / "scores_all.tsv"
+        tmp = cache.with_name(f"{cache.name}.{os.getpid()}.part")
+        tmp.write_text("".join(f"{iid}\t{popmap[iid]}\t{s}\n"
+                               for iid, s in totals[pid].items() if iid in popmap))
+        os.replace(tmp, cache)
+    pvars = [workdir / f"chr{c}.pvar" for c in chroms if (workdir / f"chr{c}.pvar").exists()]
+    if done:
+        _write_ref_tables(pvars, {pid: {(v[0], v[1]) for v in batch[pid]} for pid in done})
+    return done
 
 
 def _ref_alleles(variants, workdir: Path) -> dict[tuple[str, str], str]:
@@ -978,23 +1057,43 @@ def export_ref_table(pid: str, variants) -> Path | None:
     missing = {c for c, _p in want} - {f.name[3:-len(".pvar")] for f in pvars}
     if not pvars or missing:
         return None
-    out = ref_table(workdir)
-    tmp = out.with_name(f"{out.name}.{os.getpid()}.part")
+    return _write_ref_tables(pvars, {pid: want})[pid]
+
+
+def _write_ref_tables(pvars, wants: dict[str, set]) -> dict[str, Path]:
+    """One pass over the pvars, writing each score's ref_table from the sites it wants."""
+    owners: dict[tuple[str, str], list[str]] = {}
+    for pid, want in wants.items():
+        for site in want:
+            owners.setdefault(site, []).append(pid)
+    outs = {pid: ref_table(config.PGS_DIR / f"{pid}_1kg") for pid in wants}
+    tmps = {pid: o.with_name(f"{o.name}.{os.getpid()}.part") for pid, o in outs.items()}
+    handles = {}
     try:
-        with gzip.open(tmp, "wt") as fh:
-            for pvar in pvars:
-                with pvar.open() as src:
-                    for line in src:
-                        if line.startswith("#"):
-                            continue
-                        f = line.split("\t", 4)
-                        if len(f) >= 4 and (f[0], f[1]) in want:
-                            fh.write(f"{f[0]}\t{f[1]}\t{f[3].upper()}\n")
-        os.replace(tmp, out)
+        for pid, t in tmps.items():
+            t.parent.mkdir(parents=True, exist_ok=True)
+            handles[pid] = gzip.open(t, "wt")
+        for pvar in pvars:
+            with Path(pvar).open() as src:
+                for line in src:
+                    if line.startswith("#"):
+                        continue
+                    f = line.split("\t", 4)
+                    if len(f) < 4:
+                        continue
+                    for pid in owners.get((f[0], f[1]), ()):
+                        handles[pid].write(f"{f[0]}\t{f[1]}\t{f[3].upper()}\n")
+        for h in handles.values():
+            h.close()
+        for pid in wants:
+            os.replace(tmps[pid], outs[pid])
     except BaseException:
-        tmp.unlink(missing_ok=True)
+        for h in handles.values():
+            h.close()
+        for t in tmps.values():
+            t.unlink(missing_ok=True)
         raise
-    return out
+    return outs
 
 
 def _ref_effect_supplement(variants, covered, workdir: Path,

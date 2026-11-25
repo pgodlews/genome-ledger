@@ -73,6 +73,9 @@ def add_parser(sub) -> None:
                                                   "to split a long list across machines")
     p.add_argument("--to", type=Path, help="write bundles under DIR/bundles/")
     p.add_argument("--refresh", action="store_true", help="discard the cached copy first")
+    p.add_argument("--batch", type=int, default=1, metavar="N",
+                   help="build the 1000 Genomes reference of up to N genome-wide scores in one "
+                        "pass over each chromosome (much faster for long lists; same results)")
     p.add_argument("--prune", action="store_true",
                    help="delete the reference panel's genotype intermediates once a "
                         "genome-wide score's bundle data exists (they can run to GBs per score)")
@@ -281,7 +284,7 @@ def run(args, refresh_pages=None) -> int:
         ids = _ids(args)
         if not ids:
             raise SystemExit("name PGS ids, or --from-file")
-        done = pgs_chosen.fetch(ids, args.to, args.refresh, args.prune)
+        done = pgs_chosen.fetch(ids, args.to, args.refresh, args.prune, args.batch)
         print(f"{len(done)} of {len(ids)} ready" + (f"; bundles in {args.to / 'bundles'}"
                                                     if args.to else ""))
         missing = [i for i in ids if i not in done]

@@ -331,10 +331,66 @@ def _prune(pid: str) -> int:
 
 
 fetch_errors: dict[str, str] = {}     # why the last fetch of each id failed, for callers
+BATCH_MAX_ROWS = 60_000_000          # variant rows held in memory for one reference batch
+
+
+def _bundle_done(pid: str, to: Path | None) -> bool:
+    if not to:
+        return False
+    b, problems = verify_bundle(Path(to) / "bundles" / pid)
+    return bool(b) and not problems
+
+
+def _reference_batches(pids: list[str], to: Path | None, refresh: bool, size: int) -> None:
+    """Build the reference data of the genome-wide scores in `pids` in batches of `size`
+    (prs.reference_scores_batch), so each 1000G chromosome is read once per batch instead of
+    once per score. The per-score loop in fetch then finds the caches and writes bundles."""
+    batch: dict[str, list] = {}
+    rows = 0
+
+    def run(batch):
+        import hashlib
+        key = hashlib.sha256(",".join(sorted(batch)).encode()).hexdigest()[:12]
+        wd = config.PGS_DIR / f".batch-{key}"
+        try:
+            done = prs.reference_scores_batch(batch, wd)
+            log.info("batch %s: reference data for %d of %d score(s).", key, len(done),
+                     len(batch))
+        finally:
+            shutil.rmtree(wd, ignore_errors=True)
+
+    for pid in pids:
+        if _bundle_done(pid, to) and not refresh:
+            continue
+        try:
+            if refresh:
+                for f in [scoring_path(pid), prs._kg_cache(pid)]:
+                    f.unlink(missing_ok=True)
+                shutil.rmtree(kg_dir(pid), ignore_errors=True)
+            prs._scoring_file(pid)
+            if engine_problem(pid):
+                continue
+            variants = prs._load_variants(scoring_path(pid))
+        except Exception as e:  # noqa: BLE001 — the per-score loop reports it
+            log.warning("%s: not batched (%s)", pid, e)
+            continue
+        if len(variants) <= config.PRS_PLINK_MIN:
+            continue
+        d = kg_dir(pid)
+        if (d / "scores_all.tsv").exists() and prs.ref_table(d).exists():
+            continue
+        auto = prs._autosomal(variants)
+        if batch and (len(batch) >= size or rows + len(auto) > BATCH_MAX_ROWS):
+            run(batch)
+            batch, rows = {}, 0
+        batch[pid] = auto
+        rows += len(auto)
+    if batch:
+        run(batch)
 
 
 def fetch(pids: list[str], to: Path | None = None, refresh: bool = False,
-          prune: bool = False) -> list[str]:
+          prune: bool = False, batch: int = 1) -> list[str]:
     """Download each score and build its reference data here; with `to`, also write a bundle
     per score (and a copy of the catalog snapshot) for carrying to another machine.
 
@@ -344,6 +400,9 @@ def fetch(pids: list[str], to: Path | None = None, refresh: bool = False,
         raise SystemExit("PGS_OFFLINE is set: fetch needs the network. Run it on a connected "
                          "machine and `pgs import` the bundles here.")
     require_tools("bcftools")
+    if batch > 1:
+        _reference_batches(pids, to, refresh, batch)
+        refresh = False          # done above; the loop below must not discard what it built
     done = []
     for pid in pids:
         if to and not refresh:
