@@ -701,43 +701,6 @@ def test_local_zero_rows_are_an_answer() -> None:
           prs._kg_cache(pid).exists() and prs._kg_cache(pid).stat().st_size > 0)
 
 
-def test_quiet_hours() -> None:
-    print("notifications wait out quiet hours (Europe/London) and are sent after:")
-    import datetime as dt
-    from pipeline import notify
-    sent = []
-    saved = (config.NOTIFY_CMD, config.NOTIFY_QUIET_HOURS, notify._send, notify._now)
-    config.NOTIFY_CMD, config.NOTIFY_QUIET_HOURS = "true", "00:00-07:00"
-    notify._send = lambda m: sent.append(m) or True
-    try:
-        at = lambda h, m=0: dt.datetime(2026, 11, 26, h, m)
-        check("06:59 is quiet, 07:00 is not, 23:00 is not",
-              notify.quiet_now(at(6, 59)) and not notify.quiet_now(at(7))
-              and not notify.quiet_now(at(23)))
-        config.NOTIFY_QUIET_HOURS = "22:00-07:00"
-        check("a window wrapping midnight", notify.quiet_now(at(23)) and notify.quiet_now(at(3))
-              and not notify.quiet_now(at(12)))
-        config.NOTIFY_QUIET_HOURS = "00:00-07:00"
-        notify._now = lambda: at(2, 30)
-        check("02:30: queued, nothing sent", notify.notify("first") and sent == [])
-        notify.notify("second")
-        check("flush inside quiet hours sends nothing", notify.flush() == 0 and sent == [])
-        notify._now = lambda: at(7, 1)
-        check("07:01 flush sends both, oldest first, marked as held",
-              notify.flush() == 2 and sent[0].startswith("first (held overnight, raised 2026-11-26 02:30")
-              and sent[1].startswith("second"))
-        check("…and the queue is empty after", notify._queued() == [])
-        notify._now = lambda: at(3)
-        notify.notify("third")
-        notify._now = lambda: at(9)
-        sent.clear()
-        notify.notify("fourth")
-        check("a daytime message first sends what was held", sent[0].startswith("third")
-              and sent[1] == "fourth")
-    finally:
-        config.NOTIFY_CMD, config.NOTIFY_QUIET_HOURS, notify._send, notify._now = saved
-
-
 def test_update() -> None:
     print("pgs update: nothing unless the release changed; builds what the store lacks:")
     from pipeline import pgs_update
@@ -794,7 +757,7 @@ def test_update() -> None:
 
 TESTS = [test_covariates, test_catalog_summary, test_gate_before_download, test_consent_and_score,
          test_withdrawal_deletes, test_stale, test_bundle_roundtrip, test_offline,
-         test_ref_table, test_remote_header, test_unsupported, test_select_and_resume, test_batch_equals_per_score, test_batching_is_machine_aware, test_local_zero_rows_are_an_answer, test_quiet_hours, test_update, test_web]
+         test_ref_table, test_remote_header, test_unsupported, test_select_and_resume, test_batch_equals_per_score, test_batching_is_machine_aware, test_local_zero_rows_are_an_answer, test_update, test_web]
 
 
 def main() -> int:

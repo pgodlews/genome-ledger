@@ -762,9 +762,6 @@ def build_parser() -> argparse.ArgumentParser:
     from pipeline import pgs_cli
     pgs_cli.add_parser(sub)
 
-    sub.add_parser("notify-flush", help="send notifications held back by NOTIFY_QUIET_HOURS "
-                                        "(run from a timer just after the quiet window)")
-
     sp = sub.add_parser("serve", help="local web server for the report dashboards")
     sp.add_argument("--host", default="127.0.0.1")
     sp.add_argument("--port", type=int, default=8765)
@@ -904,8 +901,6 @@ def main(argv: list[str]) -> int:
         case "migrate-reports":
             from pipeline import migrate_reports
             return migrate_reports.migrate(args.apply)
-        case "notify-flush":
-            print(f"sent {notify_mod.flush()} held notification(s)"); return 0
         case "pgs":
             from pipeline import pgs_cli
             return pgs_cli.run(args, refresh_pages=_refresh_person_pages)

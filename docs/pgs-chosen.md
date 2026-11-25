@@ -156,9 +156,6 @@ uv run python run.py pgs update --store /path/to/pgs-bundles      # e.g. from a 
   new scores and it builds nothing, and says so: that is a job for a bigger machine.
 - For scores the family was actually scored with, it checks whether the Catalog re-harmonised
   their files, rebuilds those bundles and recomputes the results that depended on them.
-- It sends one notification when something changed. With `NOTIFY_QUIET_HOURS=00:00-07:00`
-  (local time in `NOTIFY_TZ`, default Europe/London) a message raised in that window is held and
-  goes out after it: with the next notification, or when `run.py notify-flush` runs from a
-  morning timer.
+- It sends one notification (`NOTIFY_CMD`) when something changed.
 
 Every release folder in the store is `pgs import`-able on its own.

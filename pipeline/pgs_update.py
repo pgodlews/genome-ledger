@@ -14,7 +14,7 @@ usually 5-65 new scores, occasionally a dump of a thousand or more). On a new re
   4. for the scores the family has actually been scored with, ask whether the Catalog
      re-harmonised their files (same model, new positions); rebuild those bundles and
      recompute the results that depended on them (consent still holds, so this is in scope);
-  5. send one notification with what changed (notify.notify, which holds it during quiet hours).
+  5. send one notification with what changed (notify.notify).
 
 The store is a directory of release folders, each `pgs import`-able:
     STORE/2026-11-24/bundles/PGS.../   STORE/2026-11-24/catalog/2026-11-24/   STORE/refused.tsv
