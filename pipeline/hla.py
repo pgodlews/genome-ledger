@@ -4,7 +4,7 @@ Reproduces the HLA-driven report items — **HLA-B27** (ankylosing spondylitis) 
 **celiac** DQ2.5 / DQ8 susceptibility haplotypes — from validated tag SNPs read out of
 the called VCF, the same pragmatic approach consumer reports use. This is NOT full
 classical HLA typing (no 4-digit alleles, no loci beyond B/DQA1/DQB1) — see
-`pipeline/hla_typing.py` (`hla-type` stage, arcasHLA) for that.
+`pipeline/hla_typing.py` (`hla-type` stage, T1K) for that.
 """
 
 from __future__ import annotations
@@ -119,7 +119,7 @@ def hla_report(sample: str, force: bool = False):
         "## Caveats",
         "- **Tag-SNP based, not full classical HLA typing.** Tag SNPs infer the common "
         "risk haplotypes well but don't give 4-digit alleles. For full HLA-A/B/C/DQ/DR "
-        "typing use arcasHLA (from the CRAM) or HIBAG — a heavier follow-up.",
+        "typing use the `hla-type` stage (T1K, from the CRAM).",
         ("- Genotypes are read from the **force-called** VCF (evidenced hom-ref; a site the "
          "reads could not resolve is reported as indeterminate, not as absence of risk)."
          if forced else

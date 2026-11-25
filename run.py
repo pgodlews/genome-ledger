@@ -624,7 +624,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("sample")
     sp.add_argument("--force", action="store_true")
 
-    sp = sub.add_parser("hla-type", help="full classical HLA typing (arcasHLA, Docker) "
+    sp = sub.add_parser("hla-type", help="full classical HLA typing (T1K, Docker) "
                         "for a sample")
     sp.add_argument("sample")
     sp.add_argument("--force", action="store_true")

@@ -135,7 +135,7 @@ def setup() -> None:
     _install_spliceai()
     _install_gnomad_constraint()
     _install_manta()
-    _install_arcashla()
+    _install_t1k()
     _install_mosdepth()
     _install_cyrius()
     _install_plink2()
@@ -490,28 +490,29 @@ def _install_manta() -> None:
         log.info("Manta image ready: %s", config.MANTA_IMAGE)
 
 
-def _install_arcashla() -> None:
-    """Pre-pull the arcasHLA Docker image (full classical HLA typing).
-    Same rationale as Manta — arcasHLA ships via bioconda, not a portable binary, so we
-    run it containerized; best-effort since `hla-type` typically runs on the Linux box
+def _install_t1k() -> None:
+    """Pre-pull the T1K Docker image and build its HLA index (full classical HLA typing).
+    Same rationale as Manta — T1K ships via bioconda, not a portable binary, so we run it
+    containerized; best-effort since `hla-type` typically runs on the Linux box
     (Docker + CRAMs), not the Mac. Skips quietly if Docker isn't present."""
     import shutil
+    from . import hla_typing
     if shutil.which("docker") is None:
-        log.info("Docker not found — skipping arcasHLA image pull (the `hla-type` stage "
+        log.info("Docker not found — skipping T1K image pull (the `hla-type` stage "
                  "needs Docker, usually on the Linux box).")
         return
-    have = subprocess.run(["docker", "image", "inspect", config.ARCASHLA_IMAGE],
+    have = subprocess.run(["docker", "image", "inspect", config.T1K_IMAGE],
                           capture_output=True)
-    if have.returncode == 0:
-        log.info("arcasHLA image already present (%s) — skipping.", config.ARCASHLA_IMAGE)
-        return
-    log.info("Pulling arcasHLA image %s …", config.ARCASHLA_IMAGE)
-    pull = subprocess.run(["docker", "pull", config.ARCASHLA_IMAGE])
-    if pull.returncode:
-        log.warning("Could not pull %s — run `hla-type` on a box with Docker access, "
-                    "or set ARCASHLA_IMAGE.", config.ARCASHLA_IMAGE)
-    else:
-        log.info("arcasHLA image ready: %s", config.ARCASHLA_IMAGE)
+    if have.returncode:
+        log.info("Pulling T1K image %s …", config.T1K_IMAGE)
+        if subprocess.run(["docker", "pull", config.T1K_IMAGE]).returncode:
+            log.warning("Could not pull %s — run `hla-type` on a box with Docker access, "
+                        "or set T1K_IMAGE.", config.T1K_IMAGE)
+            return
+    try:
+        log.info("T1K HLA index ready: %s", hla_typing.ensure_t1k_index())
+    except (OSError, SystemExit, subprocess.CalledProcessError) as e:
+        log.warning("Could not build the T1K HLA index (%s); `hla-type` will retry.", e)
 
 
 def _install_vep() -> None:

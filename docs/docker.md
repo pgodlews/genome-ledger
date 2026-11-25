@@ -82,7 +82,7 @@ Settings go in `.env`: `NOTIFY_CMD` (a command run with the scan's summary), `PR
 ## What does not work in a container
 
 - **`sv` and `hla-type`.** Those stages start Docker containers of their own (Manta,
-  arcasHLA). From inside a container that needs the host's Docker socket, which is
+  T1K). From inside a container that needs the host's Docker socket, which is
   root-equivalent on the host, so it is not wired up. Run those two stages from a native
   install against the same data directory.
 - **`interpret` on a GPU box.** It sends jobs over SSH and needs your SSH key and host

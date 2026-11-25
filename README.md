@@ -289,7 +289,7 @@ Available: `de_novo`, `recessive`, `compound_het`, `x_linked`, `segregation`.
 | `ancestry` | mtDNA + Y haplogroup report for a sample |
 | `traits` | single-SNP traits/wellness report for a sample |
 | `hla` | HLA risk (B27, celiac) via tag SNPs for a sample |
-| `hla-type` | full classical HLA typing (arcasHLA, in Docker) from a sample's CRAM |
+| `hla-type` | full classical HLA typing (T1K, in Docker) from a sample's CRAM; set `HLA_TYPE_TMP` to put its temporary reads on a larger disk |
 | `prs` | polygenic risk scores (PGS Catalog) for a sample — [which scores, and how to add one](docs/prs-guide.md) |
 | `force-call` | genotype the fixed positions that `traits`, `hla` and small `prs` scores look up, from the reads — [why and when](docs/runbook.md#recipe-force-calling--making-not-in-the-vcf-mean-something) |
 | `repeats` | repeat-expansion report (ExpansionHunter) for a sample |

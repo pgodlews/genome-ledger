@@ -159,26 +159,109 @@ def test_tag_negative_does_not_reassure() -> None:
     check("names what the tags cannot see", "trans" in text and "DQ2.2" in text)
 
 
-def test_cram_file_uri() -> None:
-    print("hla_typing._cram_ref_dir (file: URIs in @SQ UR):")
-    saved_run, saved_ref = subprocess.run, config.REF_FASTA
-    config.REF_FASTA = pathlib.Path("/refs/lena/ref.fa")
+def test_t1k_parsing() -> None:
+    print("hla_typing._parse_t1k (quality, ties and rejected alleles):")
+    tsv = TMP / "t1k_genotype.tsv"
+    tsv.write_text("\n".join([
+        "HLA-A\t2\tHLA-A*01:01:01\t50.0\t30\tHLA-A*02:01:01\t48.0\t28\t.",
+        "HLA-B\t2\tHLA-B*07:02:01\t40.0\t25\tHLA-B*08:01:01\t12.0\t5\t.",
+        "HLA-C\t2\tHLA-C*04:01:01,HLA-C*04:09\t20.0\t30\tHLA-C*07:01:01\t20.0\t30\t.",
+        "HLA-DPA1\t1\tHLA-DPA1*01:03:01\t90.0\t60\t.\t0\t-1\t.",
+        "HLA-DQA1\t2\tHLA-DQA1*01:01:01\t50.0\t30\tHLA-DQA1*05:01:01\t2.0\t0\t.",
+        "HLA-DRB3\t1\tHLA-DRB3*01:01:02\t30.0\t30\t.\t0\t-1\t.",
+        "HLA-DQB1\t0\t.\t0\t-1\t.\t0\t-1\t.",
+    ]) + "\n")
+    calls = hla_typing._parse_t1k(tsv)
+    check("a clean call is not low confidence", calls["A"]["low"] is False)
+    check("names are cut to two fields", calls["A"]["alleles"][0]["names"] == ["A*01:01"])
+    check("a quality under the threshold is low", calls["B"]["low"] is True)
+    check("ties across 2-field alleles are low",
+          calls["C"]["low"] is True and calls["C"]["alleles"][0]["names"] == ["C*04:01", "C*04:09"])
+    check("a homozygous call keeps one allele",
+          len(calls["DPA1"]["alleles"]) == 1 and calls["DPA1"]["low"] is False)
+    check("a quality-0 allele is dropped and flags the locus",
+          len(calls["DQA1"]["alleles"]) == 1 and calls["DQA1"]["low"] is True)
+    check("loci outside the panel are ignored", "DRB3" not in calls)
+    check("an empty locus is a no call", "DQB1" not in calls)
+    check("the report row shows low confidence",
+          hla_typing._locus_row("B", calls["B"]).endswith("| 25, 5 | low |"))
+    check("the report row shows a no call",
+          "no call" in hla_typing._locus_row("DQB1", calls.get("DQB1")))
 
-    def header(ur):
-        out = f"@HD\tVN:1.6\n@SQ\tSN:1\tLN:400\tUR:{ur}\n"
+
+def test_low_confidence_risk_calls() -> None:
+    print("hla_typing._risk_calls (low-confidence loci):")
+    other = {"B": ["B*07:02", "B*08:01"], "DQA1": ["DQA1*01:01"], "DQB1": ["DQB1*05:01"]}
+    check("low B without a tag is not a negative",
+          "not determined" in hla_typing._risk_calls(other, {}, {"B"})[0])
+    check("low B with an agreeing negative tag is absent",
+          ": absent (low-confidence" in hla_typing._risk_calls(other, {"B27": False}, {"B"})[0])
+    b27 = {"B": ["B*27:05", "B*08:01"]}
+    check("low B*27 with an agreeing tag is present",
+          ": present (low-confidence" in hla_typing._risk_calls(b27, {"B27": True}, {"B"})[0])
+    check("low B*27 without a tag is not determined",
+          "not determined" in hla_typing._risk_calls(b27, {}, {"B"})[0])
+    check("low B against the tag stays unresolved",
+          "unresolved" in hla_typing._risk_calls(other, {"B27": True}, {"B"})[0])
+    subtype = {"B": ["B*27:09", "B*08:01"]}
+    check("a low non-associated subtype is not called",
+          "not determined" in hla_typing._risk_calls(subtype, {"B27": True}, {"B"})[0])
+    check("low DQ cannot read as neither",
+          "not determined" in hla_typing._risk_calls(other, {"DQ2.5": False}, {"DQB1"})[1])
+    dq25 = {"DQA1": ["DQA1*05:01"], "DQB1": ["DQB1*02:01"]}
+    check("low DQ2.5 with an agreeing tag stands",
+          ": DQ2.5 (low-confidence" in hla_typing._risk_calls(dq25, {"DQ2.5": True}, {"DQA1"})[1])
+    check("low DQ2.5 without a tag is not determined",
+          "not determined" in hla_typing._risk_calls(dq25, {}, {"DQA1"})[1])
+    check("a low locus elsewhere leaves the risk calls alone",
+          ": absent (" in hla_typing._risk_calls(other, {"B27": False}, {"C"})[0])
+
+
+def test_t1k_read_selection() -> None:
+    print("hla_typing._mhc_contig / _read_filter:")
+    saved = subprocess.run
+
+    def contig(sq):
+        out = f"@HD\tVN:1.6\n@SQ\tSN:1\tLN:400\n{sq}\n"
         subprocess.run = lambda *a, **k: type("R", (), {"stdout": out})()
-        return hla_typing._cram_ref_dir(pathlib.Path("/data/Jan.cram"))
+        try:
+            return hla_typing._mhc_contig(pathlib.Path("/data/Jan.cram"))
+        except SystemExit as e:
+            return f"error: {e}"
+        finally:
+            subprocess.run = saved
 
+    length = config.HLA_CHR6_LENGTH
+    check("Ensembl naming", contig(f"@SQ\tSN:6\tLN:{length}") == "6")
+    check("UCSC naming", contig(f"@SQ\tSN:chr6\tLN:{length}") == "chr6")
+    check("another build stops", contig("@SQ\tSN:6\tLN:171115067").startswith("error"))
+    check("a missing chromosome stops", contig("@SQ\tSN:7\tLN:400").startswith("error"))
+    expr = hla_typing._read_filter("chr6")
+    check("keeps unmapped reads and their mates", "flag.unmap" in expr and "flag.munmap" in expr)
+    check("keeps mates of MHC reads", 'rnext=="chr6"' in expr and "pnext>=28510120" in expr)
+
+
+def test_t1k_index_checksum() -> None:
+    print("hla_typing.ensure_t1k_index (pinned reference):")
+    saved = config.T1K_DIR, config.T1K_INDEX_DIR, hla_typing.require_tools
+    root = TMP / "t1k"
+    root.mkdir()
+    config.T1K_DIR, config.T1K_INDEX_DIR = root, root / "imgt-test"
+    hla_typing.require_tools = lambda *a: None
     try:
-        check("file:/// keeps only the directory", header("file:///refs/jan/ref.fa") == "/refs/jan")
-        check("percent-encoding is decoded",
-              header("file:///refs/jan%20old/ref.fa") == "/refs/jan old")
-        check("file: URI of our own reference needs no mount",
-              header("file:///refs/lena/ref.fa") is None)
-        check("a bare path still works", header("/refs/jan/ref.fa") == "/refs/jan")
-        check("a remote URL has nothing to mount", header("https://example.org/r/ref.fa") is None)
+        (root / "hla.dat.zip").write_bytes(b"not the pinned file")
+        try:
+            hla_typing.ensure_t1k_index()
+            refused = False
+        except SystemExit:
+            refused = True
+        check("a reference with the wrong checksum is refused", refused)
+        config.T1K_INDEX_DIR.mkdir()
+        built = config.T1K_INDEX_DIR / "hlaidx_dna_seq.fa"
+        built.write_text(">x\nA\n")
+        check("an existing index is reused", hla_typing.ensure_t1k_index() == built)
     finally:
-        subprocess.run, config.REF_FASTA = saved_run, saved_ref
+        config.T1K_DIR, config.T1K_INDEX_DIR, hla_typing.require_tools = saved
 
 
 def test_pgx_flags_by_exact_value() -> None:
@@ -384,7 +467,10 @@ def test_multi_record_site_is_not_hom_ref() -> None:
 
 
 TESTS = [test_trans_dq25_is_recognised, test_tag_status, test_tag_negative_does_not_reassure,
-         test_cram_file_uri,
+         test_t1k_parsing,
+         test_low_confidence_risk_calls,
+         test_t1k_read_selection,
+         test_t1k_index_checksum,
          test_pgx_flags_by_exact_value, test_absent_indel_rows, test_colocated_genotypes,
          test_colocated_frequencies, test_missing_frequency, test_partial_pvars,
          test_population_map_download, test_duplicate_coordinate_not_credited,

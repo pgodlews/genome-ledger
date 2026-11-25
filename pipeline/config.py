@@ -71,7 +71,7 @@ def set_genomes_root(root: Path | str) -> None:
     global PHASE_DIR, SHARE_DIR, FORCECALL_DIR, FC_SITES_DIR, INTERPRET_DIR, GATK_DIR, GATK_BIN, GATK_JAR
     global VEP_DIR, HAPLOGREP_DIR, EXPANSIONHUNTER_DIR, MOSDEPTH_DIR, PHARMCAT_DIR
     global VEP_BIN, HAPLOGREP_JAR, PHARMCAT_JAR, PHARMCAT_PIPELINE, KG_PANEL_FILE
-    global CYRIUS_DIR, PGS_DIR, PLINK2_DIR, LIFTOVER_DIR
+    global CYRIUS_DIR, PGS_DIR, PLINK2_DIR, LIFTOVER_DIR, T1K_DIR, T1K_INDEX_DIR
     global REF_FASTA, HG38_CHR_FASTA, HG19TOHG38_CHAIN
     global ALPHAMISSENSE_FILE, GNOMAD_CONSTRAINT_FILE, SPLICEAI_SNV_FILE, SPLICEAI_INDEL_FILE
     global ALPHAGENOME_LONG_FILE
@@ -142,6 +142,8 @@ def set_genomes_root(root: Path | str) -> None:
     PGS_DIR = GENOMES_ROOT / "tools" / "pgs"
     KG_PANEL_FILE = PGS_DIR / "1kg_3202_population.txt"
     PLINK2_DIR = GENOMES_ROOT / "tools" / "plink2"
+    T1K_DIR = GENOMES_ROOT / "tools" / "t1k"
+    T1K_INDEX_DIR = T1K_DIR / f"imgt-{T1K_IMGT_VERSION}"
     LIFTOVER_DIR = GENOMES_ROOT / "refs" / "liftover"
 
     REF_FASTA = REFS_DIR / "Homo_sapiens.GRCh38.dna.primary_assembly.fa"
@@ -387,23 +389,37 @@ TRAITS_DIR = GENOMES_ROOT / "traits"
 
 # --- HLA risk tag SNPs (pipeline/hla.py) -------------------------------------
 # Pragmatic HLA risk (B27, celiac DQ2.5/DQ8) via validated tag SNPs, same rules schema
-# as traits. Full classical typing (arcasHLA/HIBAG) is a heavier follow-up.
+# as traits. Full classical typing is the separate `hla-type` stage below.
 HLA_FILE = Path(__file__).resolve().parent.parent / "panels" / "hla_tags.tsv"
 HLA_DIR = GENOMES_ROOT / "hla"
 
-# --- Full classical HLA typing (arcasHLA, pipeline/hla_typing.py) -----------
+# --- Full classical HLA typing (T1K, pipeline/hla_typing.py) ------------------
 # 4-digit HLA-A/B/C/DPA1/DPB1/DQA1/DQB1/DRB1 alleles straight from the CRAM, superseding
-# the tag-SNP proxies above. arcasHLA extracts chr6(+HLA alt/decoy) reads with samtools,
-# then kallisto-pseudoaligns them against the IMGT/HLA reference to call genotypes — no
-# Python-2 issue like Manta, but it ships via bioconda, so (like Manta) we run it
-# containerized (biocontainers) rather than adding conda to this project's toolchain.
+# the tag-SNP proxies above. samtools extracts the MHC and unmapped read pairs, and T1K types
+# them against genomic IPD-IMGT/HLA sequences. T1K ships via bioconda, so (like Manta) we run
+# it containerized (biocontainers) rather than adding conda to this project's toolchain.
 # Runs wherever the CRAM + Docker live (e.g. a Linux compute server, same as `sv`).
-ARCASHLA_VERSION = "0.6.0"
-ARCASHLA_IMAGE = os.environ.get(
-    "ARCASHLA_IMAGE", "quay.io/biocontainers/arcas-hla:0.6.0--hdfd78af_2")
+T1K_VERSION = "1.0.10"
+# Biocontainers tag 1.0.10--h5814d7d_0, pinned by digest.
+T1K_IMAGE = os.environ.get(
+    "T1K_IMAGE", "quay.io/biocontainers/t1k@sha256:"
+    "250f92b6eb37f0df2abc066c4c9ddcdfe4084d9c565475d99a022713952f9a95")
+T1K_IMGT_VERSION = "3.64.0"
+T1K_IMGT_COMMIT = "bdc6233a79b1d0323140c25ef6e2e6d4e7187c26"
+T1K_IMGT_URL = f"https://raw.githubusercontent.com/ANHIG/IMGTHLA/{T1K_IMGT_COMMIT}/hla.dat.zip"
+T1K_IMGT_SHA256 = "e756cfc20d0734009c4b33eda27f68825db1c13793421fb3ab03251fe364f152"
+T1K_DIR = GENOMES_ROOT / "tools" / "t1k"
+T1K_INDEX_DIR = T1K_DIR / f"imgt-{T1K_IMGT_VERSION}"
+# Called alleles under this T1K quality are reported as low confidence.
+T1K_MIN_QUALITY = 15
 HLA_TYPE_DIR = GENOMES_ROOT / "hla_typing"
-# Genes arcasHLA resolves well from short reads (its own recommended set).
 HLA_TYPE_GENES = ["A", "B", "C", "DPA1", "DPB1", "DQA1", "DQB1", "DRB1"]
+# Temporary extracted reads can reach tens of GB. Unset, they sit beside the sample's output.
+HLA_TYPE_TMP = os.environ.get("HLA_TYPE_TMP")
+# GRCh38 chromosome 6 and the extended MHC.
+HLA_CHR6_LENGTH = 170_805_979
+HLA_MHC_START = 28_510_120
+HLA_MHC_END = 33_480_577
 
 # --- Polygenic risk scores (PGS Catalog, pipeline/prs.py) --------------------
 # Weighted dosage scores from PGS Catalog harmonized (GRCh38) scoring files. Small scores use

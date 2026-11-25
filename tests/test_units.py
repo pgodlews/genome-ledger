@@ -728,7 +728,7 @@ def test_mito_heteroplasmy() -> None:
 
 
 def test_hla_typing() -> None:
-    """HLA typing: 4-digit truncation + risk-call re-derivation from arcasHLA genotype JSON."""
+    """HLA typing: 4-digit truncation + risk-call re-derivation from typed alleles."""
     print("hla_typing._four_digit / _risk_calls:")
     from pipeline import hla_typing as ht
 

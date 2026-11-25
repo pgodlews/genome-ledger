@@ -86,7 +86,7 @@ flowchart LR
         SV["sv<br/>Manta (Docker)<br/>large deletions / duplications"]
         COV["callable<br/>mosdepth<br/>what was not seen"]
         MITO["mito<br/>Mutect2 mito mode<br/>heteroplasmy fractions"]
-        HLAT["hla-type<br/>arcasHLA (Docker)<br/>4-digit HLA alleles"]
+        HLAT["hla-type<br/>T1K (Docker)<br/>4-digit HLA alleles"]
         FC["force-call<br/>GATK at curated positions<br/>evidenced genotypes"]
     end
 
@@ -155,7 +155,7 @@ flowchart LR
 | **mito** | CRAM | Mitochondrial heteroplasmy | Mutect2 mito-mode — what fraction of mtDNA carries a variant |
 | **phase** | DuckDB + own CRAM | Are two hits on the same copy? | WhatsHap — resolves pairs transmission cannot, and needs no parents |
 | **segregation** | DuckDB + parents' CRAMs | Which parent transmitted each variant? | in-cis (one copy intact) vs in-trans (both hit) — the difference between benign and disease |
-| **hla-type** | CRAM | Full classical HLA alleles | arcasHLA — cross-checks the tag-SNP calls and gives 4-digit types |
+| **hla-type** | CRAM | Full classical HLA alleles | T1K — cross-checks the tag-SNP calls, gives 4-digit types and flags low-confidence loci |
 | **interpret** | DuckDB + GPU box, or the AlphaGenome API | Does a non-coding variant disturb regulation, and in which tissue? | Enformer / Borzoi scores (GPU), or AlphaGenome 2 scores in each gene's disease tissue (opt-in API: needs a key and per-carrier consent; every request logged) |
 | **denovo** | DuckDB + parents' CRAMs | Which variants are new in this child? | Expected 40–150 SNVs/generation — one of the few stages with a hard published prior |
 
@@ -191,7 +191,7 @@ flowchart TD
         HG["Haplogrep 3"]
         PLINK["plink2 (genome-wide PRS)"]
         MOS["mosdepth"]
-        DOCK["Docker images<br/>Manta, arcasHLA (optional)"]
+        DOCK["Docker images<br/>Manta, T1K (optional)"]
         DUCK["DuckDB (python)"]
     end
 
