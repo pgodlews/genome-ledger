@@ -908,6 +908,19 @@ def _score_reference(prefix: Path, chrom: str, chrom_vars, workdir: Path,
                              "--score", str(sf),
                              "1", "2", "3", "header", "cols=+scoresums", "no-mean-imputation",
                              "--out", str(op)], capture_output=True, text=True)
+        if pp.returncode and "No valid variants" in (pp.stderr or "") + (pp.stdout or ""):
+            # None of the score's variants on this chromosome is in the reference panel (a
+            # score with one or two variants here, all absent from 1000G). That is not a
+            # failed chromosome: every reference individual contributes 0 from it, exactly as
+            # the sample does. Treating it as missing withheld the score's whole percentile.
+            psam = prefix.with_suffix(".psam")
+            rows = [ln.split("\t") for ln in psam.read_text().splitlines()] if psam.exists() else []
+            if not rows or not rows[0] or not rows[0][0].startswith("#"):
+                return None
+            col = next((i for i, c in enumerate(rows[0]) if c.lstrip("#") == "IID"), None)
+            if col is None:
+                return None
+            return {r[col]: 0.0 for r in rows[1:] if len(r) > col}
         if pp.returncode:
             # Same reasoning as the bcftools guard in _reference_freqs: plink2 can write a
             # partial .sscore and then fail, and a partial reference panel does not degrade

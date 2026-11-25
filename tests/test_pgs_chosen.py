@@ -588,7 +588,11 @@ def test_batch_equals_per_score() -> None:
                 out.append((chrom, str(p), rnd.choice([ref, a1]), a1, round(rnd.uniform(-1, 1), 4)))
         return out
     scores = {"PGS999201": score(150, 0), "PGS999202": score(120, 40),   # overlaps the first
-              "PGS999203": score(60, 220)}
+              "PGS999203": score(60, 220),
+              # chr2 holds a single variant at a position 1000G does not have: plink2 finds
+              # nothing to score there, which must count as 0, not as a failed chromosome.
+              "PGS999204": [v for v in score(50, 0) if v[0] == "1"]
+                           + [("2", "999999", "A", "G", 0.5)]}
     per = {}
     for pid, vs in scores.items():
         shutil.rmtree(config.PGS_DIR / f"{pid}_1kg", ignore_errors=True)
