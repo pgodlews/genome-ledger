@@ -760,12 +760,24 @@ def prebuild_references(items, size: int | None = None) -> list[str]:
     return built
 
 
+def _empty_marker(workdir: Path, chrom: str) -> Path:
+    """Marks a chromosome on which 1000G has none of the requested positions."""
+    return workdir / f"chr{chrom}.empty"
+
+
+def _has_records(vcf: Path) -> bool:
+    proc = subprocess.run(["bcftools", "view", "-H", str(vcf)], capture_output=True, text=True)
+    return bool(proc.stdout.strip())
+
+
 def _kg_ref_pgen(chrom: str, chrom_vars, workdir: Path) -> Path | None:
     """Cached per-chromosome reference pgen of 1000G genotypes at the score's positions.
     Sample-independent → built once per PGS and reused for the whole family."""
     prefix = workdir / f"chr{chrom}"
     if prefix.with_suffix(".pgen").exists():
         return prefix
+    if _empty_marker(workdir, chrom).exists():
+        return _empty_marker(workdir, chrom)
     workdir.mkdir(parents=True, exist_ok=True)
     # Per-process temp names. The {pid}_1kg workdir is deliberately shared across the family
     # (the reference panel is sample-independent), so fixed temp names let two members scored
@@ -802,6 +814,13 @@ def _kg_ref_pgen(chrom: str, chrom_vars, workdir: Path) -> Path | None:
         subset.unlink(missing_ok=True)
         return None
     reg.unlink(missing_ok=True)
+    if not _has_records(subset):
+        # None of these positions is in 1000G on this chromosome: nothing to build, and
+        # nothing to score. A marker, not a failure — the chromosome contributes 0 to every
+        # reference individual, as it does to the sample (see _score_reference).
+        subset.unlink(missing_ok=True)
+        _empty_marker(workdir, chrom).write_text("")
+        return _empty_marker(workdir, chrom)
     # --max-alleles 2: keep clean biallelic records so the score's A1 matches unambiguously.
     # plink2 strips any "chr" prefix on output regardless of source contig naming (verified
     # empirically), so @:# var IDs come out bare ("1:pos") — matched by the score file.
@@ -899,6 +918,8 @@ def _score_reference(prefix: Path, chrom: str, chrom_vars, workdir: Path,
     variants on this chromosome, or None if plink2 produced nothing usable. The pgen may hold
     more sites than the score uses (a batch panel, see reference_scores_batch): plink2 --score
     reads only the IDs in the score file, so the extra sites change nothing."""
+    if prefix.name.endswith(".empty"):
+        return {}
     sf = workdir / f".score_{label}_chr{chrom}.{os.getpid()}.txt"
     _write_score_file(sf, chrom_vars)
     op = workdir / f".sc_{label}_chr{chrom}.{os.getpid()}"
@@ -909,18 +930,11 @@ def _score_reference(prefix: Path, chrom: str, chrom_vars, workdir: Path,
                              "1", "2", "3", "header", "cols=+scoresums", "no-mean-imputation",
                              "--out", str(op)], capture_output=True, text=True)
         if pp.returncode and "No valid variants" in (pp.stderr or "") + (pp.stdout or ""):
-            # None of the score's variants on this chromosome is in the reference panel (a
-            # score with one or two variants here, all absent from 1000G). That is not a
-            # failed chromosome: every reference individual contributes 0 from it, exactly as
-            # the sample does. Treating it as missing withheld the score's whole percentile.
-            psam = prefix.with_suffix(".psam")
-            rows = [ln.split("\t") for ln in psam.read_text().splitlines()] if psam.exists() else []
-            if not rows or not rows[0] or not rows[0][0].startswith("#"):
-                return None
-            col = next((i for i, c in enumerate(rows[0]) if c.lstrip("#") == "IID"), None)
-            if col is None:
-                return None
-            return {r[col]: 0.0 for r in rows[1:] if len(r) > col}
+            # None of the score's variants on this chromosome is in the panel (one or two
+            # variants here, all absent from 1000G). Not a failed chromosome: it contributes
+            # 0 to every reference individual, as it does to the sample. Treating it as
+            # missing withheld the score's whole percentile.
+            return {}
         if pp.returncode:
             # Same reasoning as the bcftools guard in _reference_freqs: plink2 can write a
             # partial .sscore and then fail, and a partial reference panel does not degrade
@@ -1107,7 +1121,8 @@ def _ref_alleles(variants, workdir: Path) -> dict[tuple[str, str], str]:
     pvars = sorted(workdir.glob("chr*.pvar"))
     # All or nothing. A failed extraction leaves the other chromosomes' pvars behind, and using
     # them supplemented only those chromosomes: a raw score that was neither convention.
-    missing = {c for c, _p in want} - {f.name[3:-len(".pvar")] for f in pvars}
+    missing = ({c for c, _p in want} - {f.name[3:-len(".pvar")] for f in pvars}
+               - {f.name[3:-len(".empty")] for f in workdir.glob("chr*.empty")})
     if pvars and missing:
         log.warning("  1000G pvars under %s are incomplete (no chr%s) — not using them.",
                     workdir.name, ", chr".join(sorted(missing)))
@@ -1160,7 +1175,8 @@ def export_ref_table(pid: str, variants) -> Path | None:
     workdir = config.PGS_DIR / f"{pid}_1kg"
     pvars = sorted(workdir.glob("chr*.pvar"))
     want = {(v[0], v[1]) for v in variants}
-    missing = {c for c, _p in want} - {f.name[3:-len(".pvar")] for f in pvars}
+    missing = ({c for c, _p in want} - {f.name[3:-len(".pvar")] for f in pvars}
+               - {f.name[3:-len(".empty")] for f in workdir.glob("chr*.empty")})
     if not pvars or missing:
         return None
     return _write_ref_tables(pvars, {pid: want})[pid]
