@@ -34,6 +34,11 @@ CATEGORY_EXTERNAL_SCORING = "external_scoring"
 
 CATEGORY_ADULT_ONSET_UNTREATABLE = "adult_onset_untreatable"
 
+# `pgs:<trait id>` — consent to polygenic scores for one trait, chosen from the PGS Catalog
+# (pipeline/pgs_chosen.py). A data gate, unlike the categories above: nothing is computed
+# without it, and withdrawing it deletes what was computed.
+PGS_PREFIX = "pgs:"
+
 _TRUE = {"yes", "true", "1"}
 
 
@@ -47,6 +52,10 @@ def gated_outputs(sample: str, category: str) -> list:
     be shown now.
     """
     from . import config as _cfg
+    if category.startswith(PGS_PREFIX):
+        # A chosen polygenic score (pgs_chosen.py): its results exist only under this grant.
+        from .pgs_chosen import gated_outputs as chosen_outputs
+        return chosen_outputs(sample, category[len(PGS_PREFIX):])
     if category != CATEGORY_ADULT_ONSET_UNTREATABLE:
         return []
     from . import reportpaths
@@ -175,7 +184,15 @@ def set_consent(sample: str, category: str, consent: bool) -> None:
                     if out.exists():
                         out.unlink()
                         removed.append(out.name)
-            if removed:
+            if category.startswith(PGS_PREFIX):
+                # The chosen-scores report lists other traits too: rebuild it from what remains.
+                from .pgs_chosen import after_withdrawal
+                after_withdrawal(owned)
+                results = [n for n in removed if n.startswith("PGS") and n.endswith(".json")]
+                log.warning("Withdrew %s for %s — deleted %d result(s); the chosen-scores "
+                            "report was rebuilt from what remains.", category, person,
+                            len(results))
+            elif removed:
                 log.warning("Revoked %s for %s — removed the output(s) that disclosed it: "
                             "%s. Re-run the stage to regenerate them under the new policy.",
                             category, person, ", ".join(sorted(removed)))

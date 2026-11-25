@@ -759,6 +759,9 @@ def build_parser() -> argparse.ArgumentParser:
                         "into reports/md/ (dry-run unless --apply)")
     sp.add_argument("--apply", action="store_true")
 
+    from pipeline import pgs_cli
+    pgs_cli.add_parser(sub)
+
     sp = sub.add_parser("serve", help="local web server for the report dashboards")
     sp.add_argument("--host", default="127.0.0.1")
     sp.add_argument("--port", type=int, default=8765)
@@ -898,6 +901,9 @@ def main(argv: list[str]) -> int:
         case "migrate-reports":
             from pipeline import migrate_reports
             return migrate_reports.migrate(args.apply)
+        case "pgs":
+            from pipeline import pgs_cli
+            return pgs_cli.run(args, refresh_pages=_refresh_person_pages)
         case "serve":
             return cmd_serve(args)
         case "demo":

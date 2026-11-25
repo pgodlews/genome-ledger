@@ -50,6 +50,10 @@ class _Handler(BaseHTTPRequestHandler):
         # Browsers percent-encode non-ASCII and spaces in a person's page name. Decode before
         # the path checks below, which then see the real path whatever was encoded in it.
         rel = unquote(parsed.path).lstrip("/")
+        if rel == "pgs" or rel.startswith("pgs/"):
+            # The score picker (pgs_web.py): generated pages and JSON, never files from disk.
+            from . import pgs_web
+            return pgs_web.handle_get(self, parsed)
         if "\0" in rel:     # no file has this name, and path calls raise on it
             return self._send(404, b'{"error":"not found"}')
         if rel in ("", "index.html"):
@@ -87,6 +91,15 @@ class _Handler(BaseHTTPRequestHandler):
             return self._send(403, b'{"error":"forbidden"}')
         return self._send(200, target.read_bytes(), ctype)
 
+    def do_POST(self):
+        # The only writes this server takes: the picker's consent and scoring requests, each
+        # checked in pgs_web for a loopback client, the page's token and the origin.
+        parsed = urlparse(self.path)
+        if parsed.path.startswith("/pgs/api/"):
+            from . import pgs_web
+            return pgs_web.handle_post(self, parsed)
+        return self._send(405, b'{"error":"method not allowed"}')
+
 _NO_REPORTS = ("<!DOCTYPE html><meta charset=utf-8><title>Genome reports</title>"
                "<h1>Genome reports</h1><p>No reports yet. Run <code>scan</code> (or "
                "<code>render</code>) to build them.</p>")
@@ -95,6 +108,7 @@ _NO_REPORTS = ("<!DOCTYPE html><meta charset=utf-8><title>Genome reports</title>
 def serve(host: str = "127.0.0.1", port: int = 8765) -> None:
     httpd = ThreadingHTTPServer((host, port), _Handler)
     log.info("Serving reports at http://%s:%d/  (Ctrl-C to stop)", host, port)
+    log.info("Score picker at http://%s:%d/pgs/", host, port)
     if host not in ("127.0.0.1", "localhost"):
         log.warning("Bound to %s — this server is UNAUTHENTICATED; keep it LAN-only.", host)
     try:

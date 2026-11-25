@@ -50,7 +50,7 @@ ALL_DIRS = [
     REFS_DIR, INCOMING_DIR, ALIGNED_DIR, CALLED_DIR, RAW_DIR, NORMALIZED_DIR,
     SNAPSHOTS_DIR, VEP_CACHE_DIR, ANNOTATED_DIR, DUCKDB_DIR, REPORTS_DIR,
     MANIFEST_DIR, LOGS_DIR, GENOMES_ROOT / "pgx", GENOMES_ROOT / "ancestry",
-    GENOMES_ROOT / "traits", GENOMES_ROOT / "hla", GENOMES_ROOT / "prs",
+    GENOMES_ROOT / "traits", GENOMES_ROOT / "hla", GENOMES_ROOT / "prs", GENOMES_ROOT / "prs_chosen",
     GENOMES_ROOT / "repeats", GENOMES_ROOT / "sv", GENOMES_ROOT / "callable",
     GENOMES_ROOT / "phase", GENOMES_ROOT / "forcecalled", GENOMES_ROOT / "mito",
     GENOMES_ROOT / "interpret", GENOMES_ROOT / "hla_typing", GENOMES_ROOT / "denovo",
@@ -72,6 +72,7 @@ def set_genomes_root(root: Path | str) -> None:
     global VEP_DIR, HAPLOGREP_DIR, EXPANSIONHUNTER_DIR, MOSDEPTH_DIR, PHARMCAT_DIR
     global VEP_BIN, HAPLOGREP_JAR, PHARMCAT_JAR, PHARMCAT_PIPELINE, KG_PANEL_FILE
     global CYRIUS_DIR, PGS_DIR, PLINK2_DIR, LIFTOVER_DIR, T1K_DIR, T1K_INDEX_DIR
+    global PGS_CATALOG_DIR, PRS_CHOSEN_DIR
     global REF_FASTA, HG38_CHR_FASTA, HG19TOHG38_CHAIN
     global ALPHAMISSENSE_FILE, GNOMAD_CONSTRAINT_FILE, SPLICEAI_SNV_FILE, SPLICEAI_INDEL_FILE
     global ALPHAGENOME_LONG_FILE
@@ -112,6 +113,7 @@ def set_genomes_root(root: Path | str) -> None:
     HLA_DIR = GENOMES_ROOT / "hla"
     HLA_TYPE_DIR = GENOMES_ROOT / "hla_typing"
     PRS_DIR = GENOMES_ROOT / "prs"
+    PRS_CHOSEN_DIR = GENOMES_ROOT / "prs_chosen"
     KG_VCF_LOCAL_DIR = GENOMES_ROOT / "refs" / "1000G_phased"
     DENOVO_DIR = GENOMES_ROOT / "denovo"
     SEGREGATION_DIR = GENOMES_ROOT / "segregation"
@@ -140,6 +142,7 @@ def set_genomes_root(root: Path | str) -> None:
     PHARMCAT_PIPELINE = PHARMCAT_DIR / "preprocessor" / "pharmcat_pipeline"
     CYRIUS_DIR = GENOMES_ROOT / "tools" / "Cyrius"
     PGS_DIR = GENOMES_ROOT / "tools" / "pgs"
+    PGS_CATALOG_DIR = GENOMES_ROOT / "tools" / "pgs_catalog"
     KG_PANEL_FILE = PGS_DIR / "1kg_3202_population.txt"
     PLINK2_DIR = GENOMES_ROOT / "tools" / "plink2"
     T1K_DIR = GENOMES_ROOT / "tools" / "t1k"
@@ -158,7 +161,7 @@ def set_genomes_root(root: Path | str) -> None:
         REFS_DIR, INCOMING_DIR, ALIGNED_DIR, CALLED_DIR, RAW_DIR, NORMALIZED_DIR,
         SNAPSHOTS_DIR, VEP_CACHE_DIR, ANNOTATED_DIR, DUCKDB_DIR, REPORTS_DIR,
         MANIFEST_DIR, LOGS_DIR, PGX_DIR, ANCESTRY_DIR,
-        TRAITS_DIR, HLA_DIR, PRS_DIR,
+        TRAITS_DIR, HLA_DIR, PRS_DIR, PRS_CHOSEN_DIR,
         REPEATS_DIR, SV_DIR, CALLABLE_DIR,
         PHASE_DIR, FORCECALL_DIR, MITO_DIR,
         INTERPRET_DIR, HLA_TYPE_DIR, DENOVO_DIR,
@@ -464,6 +467,18 @@ PLINK2_URL_MAC = ("https://s3.amazonaws.com/plink2-assets/alpha7/"
                   "plink2_mac_arm64_20260504.zip")
 PLINK2_URL_LINUX = "https://s3.amazonaws.com/plink2-assets/plink2_linux_avx2_latest.zip"
 PRS_DIR = GENOMES_ROOT / "prs"
+# --- Scores you choose from the whole PGS Catalog (pipeline/pgs_catalog.py, pgs_chosen.py) ---
+# A dated copy of the Catalog's metadata (~12 MB of CSV) makes every score searchable offline;
+# `run.py pgs sync` refreshes it on a connected machine. Results live per callset under
+# PRS_CHOSEN_DIR, apart from the curated panel's, and nothing is scored for a person who has
+# not consented to every trait the score maps to (a data gate: nothing is computed first).
+PGS_CATALOG_DIR = GENOMES_ROOT / "tools" / "pgs_catalog"
+PGS_META_URL = "https://ftp.ebi.ac.uk/pub/databases/spot/pgs/metadata/"
+PGS_REST_URL = "https://www.pgscatalog.org/rest/"
+PRS_CHOSEN_DIR = GENOMES_ROOT / "prs_chosen"
+# PGS_OFFLINE=1: never reach the network from `pgs score`; a score must already be present
+# (imported bundle or earlier fetch). For air-gapped machines; the default fetches on demand.
+PGS_OFFLINE = os.environ.get("PGS_OFFLINE", "0").strip().lower() in ("1", "true", "yes", "on")
 # 1000 Genomes (NYGC high-coverage, GRCh38) for PRS percentile calibration. Per-population
 # allele frequencies (AF_EUR, AF_AFR, …) live in the INFO, so we remote-query just the PGS
 # positions and compute the population score distribution analytically (HWE + CLT) rather
