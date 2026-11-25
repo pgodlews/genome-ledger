@@ -206,8 +206,8 @@ _PAGE = r"""<!DOCTYPE html>
 *{box-sizing:border-box}body{margin:0;font:14px/1.45 system-ui,sans-serif;background:var(--bg);
 color:var(--fg)}header{padding:14px 20px;border-bottom:1px solid var(--line)}
 h1{font-size:18px;margin:0}h2{font-size:15px;margin:0 0 8px}.muted{color:var(--muted)}
-main{display:grid;grid-template-columns:230px 300px 1fr;gap:16px;padding:16px 20px}
-@media (max-width:1000px){main{grid-template-columns:1fr}}
+main{display:grid;grid-template-columns:minmax(150px,210px) minmax(170px,260px) minmax(0,1fr);
+gap:16px;padding:16px 20px}@media (max-width:900px){main{grid-template-columns:1fr}}
 .panel{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px;
 min-width:0}.list{max-height:60vh;overflow:auto}.item{padding:5px 6px;border-radius:5px;
 cursor:pointer;display:flex;justify-content:space-between;gap:8px}.item:hover,.item.sel{
@@ -272,7 +272,7 @@ $("#scores").replaceChildren(el("tr",{},...["","PGS ID","Variants","Published pe
 el("td",{},s.pgs_id," ",s.here?el("span",{class:"tag here"},"here"):"",s.unsupported?el("span",{class:"tag",title:s.unsupported},"cannot score"):""),
 el("td",{class:"num"},s.n_variants.toLocaleString()+(s.engine==="plink2"?" (genome-wide)":"")),
 el("td",{},s.performance_text),el("td",{},s.training_ancestry||s.gwas_ancestry||"—"),
-el("td",{},(s.released||"").slice(0,10)),el("td",{},s.licence)))))}
+el("td",{},(s.released||"").slice(0,10)),el("td",{},s.licence))))}
 function add(pid){if(!basket.includes(pid)){basket.push(pid);save();renderBasket()}}
 function drop(pid){basket=basket.filter(p=>p!==pid);save();renderBasket()}
 async function renderBasket(){$("#go").disabled=$("#wish").disabled=!basket.length;

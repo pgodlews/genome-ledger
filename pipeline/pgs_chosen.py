@@ -508,6 +508,7 @@ def score_one(callset: str, pid: str) -> dict:
     info = describe(pid)
     out_dir = config.PRS_CHOSEN_DIR / callset
     out_dir.mkdir(parents=True, exist_ok=True)
+    config.LOGS_DIR.mkdir(parents=True, exist_ok=True)     # plink2 logs its pgen build there
     r = prs._score_entry(callset, {"pgs_id": pid, "trait": trait_label(info)}, gt_vcfs, out_dir)
     result = {
         "pgs_id": pid, "traits": info["traits"], "efo_ids": info["efo_ids"],
@@ -702,7 +703,7 @@ def write_chosen_report(callset: str) -> Path | None:
         f"# Polygenic scores you chose — {callset}",
         "",
         f"- **Chosen by the family from the whole PGS Catalog, not curated.** The curated panel "
-        "is the separate *Polygenic risk scores* report; nothing here was checked against its "
+        "is the separate **Polygenic risk scores** report; nothing here was checked against its "
         "selection criteria.",
         f"- {len(rows)} score(s), each computed only after this person consented to every "
         "trait it maps to. Withdrawing consent deletes the result.",
@@ -713,7 +714,7 @@ def write_chosen_report(callset: str) -> Path | None:
         "",
         "## How to read this",
         "- **Published performance** is the median over European evaluation cohorts of the "
-        "score's AUROC or C-index *without* age, sex or clinical covariates (ancestry "
+        "score's AUROC or C-index **without** age, sex or clinical covariates (ancestry "
         "components allowed). When no such evaluation exists it says so: a figure from a model "
         "with age and sex overstates what the score alone can tell you.",
         "- The **EUR percentile** is relative genetic load against the European reference, not "

@@ -426,6 +426,14 @@ def test_web() -> None:
         code, page = get("/pgs/")
         check("the picker page is served", code == 200 and "PGS" in page)
         check("the page carries the session token", pgs_web.TOKEN in page)
+        import re
+        import shutil
+        node = shutil.which("node")
+        if node:
+            js = ROOT / "picker.js"
+            js.write_text(re.search(r"<script>(.*)</script>", page, re.S).group(1))
+            ok = subprocess.run([node, "--check", str(js)], capture_output=True)
+            check("the page's script parses (node --check)", ok.returncode == 0)
         code, body = get("/pgs/api/traits?q=invented")
         check("traits search", code == 200 and TRAIT_A in body)
         code, body = get(f"/pgs/api/scores?efo={TRAIT_A}")
