@@ -441,7 +441,7 @@ def _discover(sample: str, snap: str | None = None,
             items.append(("Health", "Regulatory effect (Enformer/Borzoi)", interp))
 
     for group, label, kind in GENOME_REPORTS:
-        md = rp.genome_report(kind, sample)
+        md = rp.listed_report(kind, sample)
         if md.exists():
             items.append((undated_group or group, label, md))
     return items
@@ -449,6 +449,7 @@ def _discover(sample: str, snap: str | None = None,
 
 # The per-genome reports, in dashboard order: (group, label, kind). The kind is the file
 # name prefix a stage passes to reportpaths.genome_report, so a new stage is listed here once.
+# A `chosen/` kind is filed by reportpaths.chosen_report instead (genome/<person>/chosen/).
 GENOME_REPORTS = (
     ("Health", "Pharmacogenomics (drug response)", "pgx"),
     ("Health", "HLA risk (B27, celiac)", "hla"),
@@ -463,6 +464,7 @@ GENOME_REPORTS = (
     ("Health", "HLA typing (4-digit alleles)", "hla_typing"),
     ("Wellness", "Traits & wellness", "traits"),
     ("Wellness", "Polygenic risk scores", "prs"),
+    ("Wellness", "Polygenic scores you chose", "chosen/prs"),
     ("Ancestry", "Ancestry — haplogroups", "ancestry"),
 )
 

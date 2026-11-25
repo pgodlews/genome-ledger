@@ -2940,12 +2940,16 @@ def test_report_dirs_wired() -> None:
             setattr(config, n, root / n.lower())
         kinds = [k for _g, _l, k in render.GENOME_REPORTS]
         for kind in kinds:
-            md = reportpaths.genome_report(kind, "SAMPLE001")
+            md = reportpaths.listed_report(kind, "SAMPLE001")
             md.parent.mkdir(parents=True, exist_ok=True)
             md.write_text("# Report\n")
-        found = [p.stem for _g, _l, p in render._discover("SAMPLE001")]
+        found = [p for _g, _l, p in render._discover("SAMPLE001")]
         check("every per-genome report kind is discovered, in the listed order",
-              found == [f"{k}_SAMPLE001" for k in kinds])
+              found == [reportpaths.listed_report(k, "SAMPLE001") for k in kinds])
+        check("a chosen/ kind is filed under genome/<person>/chosen/",
+              reportpaths.listed_report("chosen/prs", "SAMPLE001").relative_to(
+                  config.REPORTS_DIR).parts == ("md", "genome", "SAMPLE001", "chosen",
+                                                "prs_SAMPLE001.md"))
         check("an HTML path mirrors the markdown path in its own tree",
               reportpaths.html_for(reportpaths.genome_report("prs", "SAMPLE001"))
               == config.REPORTS_DIR / "html" / "genome" / "SAMPLE001" / "prs_SAMPLE001.html")
@@ -2954,7 +2958,8 @@ def test_report_dirs_wired() -> None:
         # and every stage that files one must be listed — otherwise its report is invisible.
         src = "".join(p.read_text() for p in
                       (pathlib.Path(__file__).resolve().parent.parent / "pipeline").glob("*.py"))
-        written = set(re.findall(r'genome_report\("(\w+)"', src))
+        written = set(re.findall(r'genome_report\("(\w+)"', src)) | {
+            f"{reportpaths.CHOSEN}/{k}" for k in re.findall(r'chosen_report\("(\w+)"', src)}
         check(f"listed kinds == written kinds (listed-only: {sorted(set(kinds) - written)}, "
               f"written-only: {sorted(written - set(kinds))})", set(kinds) == written)
 

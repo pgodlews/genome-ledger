@@ -7,6 +7,8 @@
           <person>/                   full_<callset>.md, panel_<callset>.md, acmg_<callset>.md
         genome/                     reports that depend on the genome, not on a ClinVar release
           <person>/                   pgx_<callset>.md, prs_<callset>.md, hla_<callset>.md, …
+            chosen/                     prs_<callset>.md — scores the family picked from the
+                                        whole PGS Catalog, kept apart from the curated panel
       md-history/                 older snapshots' markdown, same shape as md/<snapshot>/
         <snapshot>/…
       html/                       derived from the markdown, plus the navigation pages
@@ -35,6 +37,10 @@ from .util import log
 
 GENOME = "genome"     # directory for per-genome (undated) reports
 FAMILY = "_family"    # directory, inside a snapshot, for reports about the whole family
+# Inside genome/<person>/: results the family chose themselves (pgs_chosen.py). Nested here, not
+# at the top of md/, because everything at the top of md/ other than GENOME is read as a ClinVar
+# snapshot (md_snapshots, archive_older, render's snapshot lists, migrate_reports).
+CHOSEN = "chosen"
 
 
 def md_root() -> Path:
@@ -107,6 +113,18 @@ def genome_report(kind: str, sample: str) -> Path:
     return md_root() / GENOME / _person(sample) / f"{kind}_{sample}.md"
 
 
+def chosen_report(kind: str, sample: str) -> Path:
+    """One callset's report of results the family chose (genome/<person>/chosen/)."""
+    return md_root() / GENOME / _person(sample) / CHOSEN / f"{kind}_{sample}.md"
+
+
+def listed_report(kind: str, sample: str) -> Path:
+    """The report a dashboard entry names: `prs` is genome_report, `chosen/prs` chosen_report."""
+    if kind.startswith(CHOSEN + "/"):
+        return chosen_report(kind[len(CHOSEN) + 1:], sample)
+    return genome_report(kind, sample)
+
+
 def relative(md: Path) -> Path | None:
     """A report's path relative to its markdown root (md/ or md-history/), or None if the
     file is not inside the reports tree at all."""
@@ -140,6 +158,7 @@ def meta(md: Path) -> dict | None:
     if rel is None or len(rel.parts) < 3:
         return None
     top, owner, stem = rel.parts[0], rel.parts[1], rel.stem
+    chosen = top == GENOME and len(rel.parts) == 4 and rel.parts[2] == CHOSEN
     if owner == FAMILY:
         return {"report": stem.split("_")[0] if stem.startswith(("delta_", "validation_",
                                                                   "interpret_")) else stem,
@@ -151,7 +170,8 @@ def meta(md: Path) -> dict | None:
         # (full_Adam_vendor under Adam/): the callset starts at the person's id.
         i = stem.find("_" + owner)
         kind, callset = (stem[:i], stem[i + 1:]) if i > 0 else (stem, owner)
-    out = {"report": kind, "person": owner, "callset": callset}
+    out = {"report": f"{CHOSEN}_{kind}" if chosen else kind, "person": owner,
+           "callset": callset}
     if top == GENOME:
         out["scope"] = "genome"
     else:

@@ -908,6 +908,17 @@ def _ref_alleles(variants, workdir: Path) -> dict[tuple[str, str], str]:
     whether the network was up when it ran.
     """
     want = {(v[0], v[1]) for v in variants}
+    table = ref_table(workdir)
+    if table.exists():
+        # The same site list as the pvars, carried without them (a score bundle, see
+        # export_ref_table). Authoritative in the same way: a site it lacks stays unresolved.
+        refs = {}
+        with gzip.open(table, "rt") as fh:
+            for line in fh:
+                f = line.rstrip("\n").split("\t")
+                if len(f) == 3 and (f[0], f[1]) in want:
+                    refs[(f[0], f[1])] = f[2]
+        return refs
     pvars = sorted(workdir.glob("chr*.pvar"))
     # All or nothing. A failed extraction leaves the other chromosomes' pvars behind, and using
     # them supplemented only those chromosomes: a raw score that was neither convention.
@@ -949,6 +960,41 @@ def _ref_alleles(variants, workdir: Path) -> dict[tuple[str, str], str]:
         else:
             refs[(c, p)] = row_ref
     return refs
+
+
+def ref_table(workdir: Path) -> Path:
+    """REF alleles at the score sites the 1000G reference panel carries: chrom, pos, REF."""
+    return workdir / "ref_alleles.tsv.gz"
+
+
+def export_ref_table(pid: str, variants) -> Path | None:
+    """Write `ref_table` from this score's complete reference pvars, or None if they are not
+    complete. The pvars hold every 1000G INFO column (gigabytes for a genome-wide score); the
+    supplement needs only REF at the score sites, which is what a score bundle carries to a
+    machine that never ran the reference panel."""
+    workdir = config.PGS_DIR / f"{pid}_1kg"
+    pvars = sorted(workdir.glob("chr*.pvar"))
+    want = {(v[0], v[1]) for v in variants}
+    missing = {c for c, _p in want} - {f.name[3:-len(".pvar")] for f in pvars}
+    if not pvars or missing:
+        return None
+    out = ref_table(workdir)
+    tmp = out.with_name(f"{out.name}.{os.getpid()}.part")
+    try:
+        with gzip.open(tmp, "wt") as fh:
+            for pvar in pvars:
+                with pvar.open() as src:
+                    for line in src:
+                        if line.startswith("#"):
+                            continue
+                        f = line.split("\t", 4)
+                        if len(f) >= 4 and (f[0], f[1]) in want:
+                            fh.write(f"{f[0]}\t{f[1]}\t{f[3].upper()}\n")
+        os.replace(tmp, out)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+    return out
 
 
 def _ref_effect_supplement(variants, covered, workdir: Path,
