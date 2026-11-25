@@ -332,6 +332,11 @@ def _prune(pid: str) -> int:
 
 fetch_errors: dict[str, str] = {}     # why the last fetch of each id failed, for callers
 BATCH_MAX_ROWS = 60_000_000          # variant rows held in memory for one reference batch
+# Distinct positions in one batch. Everything a batch costs beyond its one read of each 1000G
+# chromosome grows with this union: the extract, the panel, and every member's plink2 pass
+# over the panel's site list. Scores on the same sites (one publication's set) share it
+# almost entirely; unrelated ones add up, so the batch is closed before it balloons.
+BATCH_MAX_UNION = 15_000_000
 
 
 def _bundle_done(pid: str, to: Path | None) -> bool:
@@ -347,6 +352,7 @@ def _reference_batches(pids: list[str], to: Path | None, refresh: bool, size: in
     once per score. The per-score loop in fetch then finds the caches and writes bundles."""
     batch: dict[str, list] = {}
     rows = 0
+    union: set = set()
 
     def run(batch):
         import hashlib
@@ -380,11 +386,14 @@ def _reference_batches(pids: list[str], to: Path | None, refresh: bool, size: in
         if (d / "scores_all.tsv").exists() and prs.ref_table(d).exists():
             continue
         auto = prs._autosomal(variants)
-        if batch and (len(batch) >= size or rows + len(auto) > BATCH_MAX_ROWS):
+        sites = {(v[0], v[1]) for v in auto}
+        if batch and (len(batch) >= size or rows + len(auto) > BATCH_MAX_ROWS
+                      or len(union | sites) > BATCH_MAX_UNION):
             run(batch)
-            batch, rows = {}, 0
+            batch, rows, union = {}, 0, set()
         batch[pid] = auto
         rows += len(auto)
+        union |= sites
     if batch:
         run(batch)
 
