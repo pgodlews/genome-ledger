@@ -701,9 +701,100 @@ def test_local_zero_rows_are_an_answer() -> None:
           prs._kg_cache(pid).exists() and prs._kg_cache(pid).stat().st_size > 0)
 
 
+def test_quiet_hours() -> None:
+    print("notifications wait out quiet hours (Europe/London) and are sent after:")
+    import datetime as dt
+    from pipeline import notify
+    sent = []
+    saved = (config.NOTIFY_CMD, config.NOTIFY_QUIET_HOURS, notify._send, notify._now)
+    config.NOTIFY_CMD, config.NOTIFY_QUIET_HOURS = "true", "00:00-07:00"
+    notify._send = lambda m: sent.append(m) or True
+    try:
+        at = lambda h, m=0: dt.datetime(2026, 11, 26, h, m)
+        check("06:59 is quiet, 07:00 is not, 23:00 is not",
+              notify.quiet_now(at(6, 59)) and not notify.quiet_now(at(7))
+              and not notify.quiet_now(at(23)))
+        config.NOTIFY_QUIET_HOURS = "22:00-07:00"
+        check("a window wrapping midnight", notify.quiet_now(at(23)) and notify.quiet_now(at(3))
+              and not notify.quiet_now(at(12)))
+        config.NOTIFY_QUIET_HOURS = "00:00-07:00"
+        notify._now = lambda: at(2, 30)
+        check("02:30: queued, nothing sent", notify.notify("first") and sent == [])
+        notify.notify("second")
+        check("flush inside quiet hours sends nothing", notify.flush() == 0 and sent == [])
+        notify._now = lambda: at(7, 1)
+        check("07:01 flush sends both, oldest first, marked as held",
+              notify.flush() == 2 and sent[0].startswith("first (held overnight, raised 2026-11-26 02:30")
+              and sent[1].startswith("second"))
+        check("…and the queue is empty after", notify._queued() == [])
+        notify._now = lambda: at(3)
+        notify.notify("third")
+        notify._now = lambda: at(9)
+        sent.clear()
+        notify.notify("fourth")
+        check("a daytime message first sends what was held", sent[0].startswith("third")
+              and sent[1] == "fourth")
+    finally:
+        config.NOTIFY_CMD, config.NOTIFY_QUIET_HOURS, notify._send, notify._now = saved
+
+
+def test_update() -> None:
+    print("pgs update: nothing unless the release changed; builds what the store lacks:")
+    from pipeline import pgs_update
+    store = ROOT / "store"
+    (store / "2026-01-02" / "bundles").mkdir(parents=True, exist_ok=True)
+    saved = (pgs_update.remote_release, pgs_catalog.sync, pgs_chosen.fetch, pgs_update.notify.notify,
+             pgs_chosen.remote_header)
+    pgs_chosen.remote_header = lambda pid: {}            # no network in tests
+    calls, notes = [], []
+    pgs_update.notify.notify = lambda m: notes.append(m) or True
+    try:
+        pgs_update.remote_release = lambda: {"date": "2026-01-02"}
+        out = pgs_update.update(store)
+        check("an unchanged release does nothing and notifies nothing",
+              not out["changed"] and notes == [])
+        pgs_update.remote_release = lambda: {"date": "2026-02-01"}
+        pgs_catalog.sync = lambda *a, **k: pgs_catalog.current_dir()
+
+        def fake_fetch(pids, to=None, refresh=False, prune=False, batch=1, link=False):
+            calls.append(list(pids))
+            done = []
+            for p in pids:
+                if p == PID_B:
+                    pgs_chosen.fetch_errors[p] = "cannot be scored here: has is_haplotype rows, which this engine does not model"
+                    continue
+                (Path(to) / "bundles" / p).mkdir(parents=True, exist_ok=True)
+                (Path(to) / "bundles" / p / "bundle.json").write_text("{}")
+                done.append(p)
+            return done
+        from pathlib import Path
+        pgs_chosen.fetch = fake_fetch
+        out = pgs_update.update(store)
+        check(f"a new release builds every computable score the store lacks (got {calls})",
+              out["changed"] and sorted(calls[0]) == sorted([PID_A, PID_AB, PID_B]))
+        check("a haplotype refusal is remembered in refused.tsv",
+              PID_B in pgs_update.refused(store))
+        check("one notification, naming the release and the counts",
+              len(notes) == 1 and "2026-02-01" in notes[0] and "2 new score bundle(s)" in notes[0]
+              and "1 refused" in notes[0])
+        calls.clear()
+        out = pgs_update.update(store, force=True)
+        check("next time neither built nor refused ones are retried", calls == [])
+        for p in (PID_A, PID_AB):
+            import shutil
+            shutil.rmtree(store / "2026-02-01" / "bundles" / p)
+        calls.clear(); notes.clear()
+        out = pgs_update.update(store, max_new=1, force=True)
+        check("more new scores than --max-new: nothing built, and it says so",
+              out["too_many"] and calls == [] and "too many" in notes[0])
+    finally:
+        (pgs_update.remote_release, pgs_catalog.sync, pgs_chosen.fetch, pgs_update.notify.notify,
+         pgs_chosen.remote_header) = saved
+
+
 TESTS = [test_covariates, test_catalog_summary, test_gate_before_download, test_consent_and_score,
          test_withdrawal_deletes, test_stale, test_bundle_roundtrip, test_offline,
-         test_ref_table, test_remote_header, test_unsupported, test_select_and_resume, test_batch_equals_per_score, test_batching_is_machine_aware, test_local_zero_rows_are_an_answer, test_web]
+         test_ref_table, test_remote_header, test_unsupported, test_select_and_resume, test_batch_equals_per_score, test_batching_is_machine_aware, test_local_zero_rows_are_an_answer, test_quiet_hours, test_update, test_web]
 
 
 def main() -> int:

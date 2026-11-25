@@ -139,3 +139,26 @@ reference data, the genotypes and the engine version.
   although consent for the trait already covers it.
 - A PGS id is never reused for a different model. When authors revise a score, it gets a new
   id.
+
+## A bundle store that follows the Catalog
+
+The PGS Catalog publishes a release about once a month: usually 5–65 new scores, occasionally a
+dump of a thousand or more. `pgs update --store DIR` keeps a store of bundles in step:
+
+```bash
+uv run python run.py pgs update --store /path/to/pgs-bundles      # e.g. from a nightly timer
+```
+
+- Each run costs one request to the Catalog. Nothing else happens until there is a new release.
+- On a new release it takes a fresh catalog snapshot, builds bundles (in batches) for every
+  computable score the store does not hold into `DIR/<release>/`, and remembers the scores the
+  engine cannot model in `DIR/refused.tsv` so they are not retried. More than `--max-new` (300)
+  new scores and it builds nothing, and says so: that is a job for a bigger machine.
+- For scores the family was actually scored with, it checks whether the Catalog re-harmonised
+  their files, rebuilds those bundles and recomputes the results that depended on them.
+- It sends one notification when something changed. With `NOTIFY_QUIET_HOURS=00:00-07:00`
+  (local time in `NOTIFY_TZ`, default Europe/London) a message raised in that window is held and
+  goes out after it: with the next notification, or when `run.py notify-flush` runs from a
+  morning timer.
+
+Every release folder in the store is `pgs import`-able on its own.

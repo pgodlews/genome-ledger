@@ -727,6 +727,12 @@ DEMO_NOTICE = ""
 # Unset = no notification. e.g. NOTIFY_CMD="ntfy publish genome"
 NOTIFY_CMD = os.environ.get("NOTIFY_CMD", "")
 NOTIFY_TIMEOUT = int(os.environ.get("NOTIFY_TIMEOUT", "30"))
+# Quiet hours: a message raised inside this window (local time in NOTIFY_TZ) is queued, not sent,
+# and goes out with the next notification after it, or via `run.py notify-flush` (a morning timer).
+# e.g. NOTIFY_QUIET_HOURS=00:00-07:00. Unset = send immediately, as before. A window may wrap
+# midnight (22:00-07:00).
+NOTIFY_QUIET_HOURS = os.environ.get("NOTIFY_QUIET_HOURS", "")
+NOTIFY_TZ = os.environ.get("NOTIFY_TZ", "Europe/London")
 
 
 # Haplogrep quality floor below which an mtDNA haplogroup call is reported as unresolved
