@@ -390,7 +390,7 @@ def _reference_batches(pids: list[str], to: Path | None, refresh: bool, size: in
 
 
 def fetch(pids: list[str], to: Path | None = None, refresh: bool = False,
-          prune: bool = False, batch: int = 1) -> list[str]:
+          prune: bool = False, batch: int = 1, link: bool = False) -> list[str]:
     """Download each score and build its reference data here; with `to`, also write a bundle
     per score (and a copy of the catalog snapshot) for carrying to another machine.
 
@@ -444,7 +444,7 @@ def fetch(pids: list[str], to: Path | None = None, refresh: bool = False,
             if not ok:
                 raise RuntimeError(why)
             if to:
-                write_bundle(pid, Path(to))
+                write_bundle(pid, Path(to), link=link)
             done.append(pid)
             log.info("%s ready.", pid)
         except Exception as e:  # noqa: BLE001 — one score must not stop the others
@@ -463,8 +463,12 @@ def _bundle_files(pid: str) -> list[Path]:
     return [scoring_path(pid), *_ref_files(pid, _genomewide(pid))]
 
 
-def write_bundle(pid: str, to: Path) -> Path:
-    """<to>/bundles/<pid>/: the score's files at their PGS_DIR-relative paths + bundle.json."""
+def write_bundle(pid: str, to: Path, link: bool = False) -> Path:
+    """<to>/bundles/<pid>/: the score's files at their PGS_DIR-relative paths + bundle.json.
+
+    `link` hard-links the files instead of copying them when `to` is on the same filesystem,
+    for a machine building many bundles at once (the whole catalog's scoring files alone are
+    ~90 GB). Off by default: a hard-linked bundle edited in place would change the cache."""
     info = describe(pid)
     d = Path(to) / "bundles" / pid
     shutil.rmtree(d, ignore_errors=True)
@@ -473,7 +477,13 @@ def write_bundle(pid: str, to: Path) -> Path:
         rel = src.relative_to(config.PGS_DIR).as_posix()
         dst = d / rel
         dst.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(src, dst)
+        if link:
+            try:
+                os.link(src, dst)
+            except OSError:
+                shutil.copy2(src, dst)
+        else:
+            shutil.copy2(src, dst)
         files[rel] = sha256(dst)
     (d / BUNDLE_FILE).write_text(json.dumps({
         "format": BUNDLE_FORMAT, "pgs_id": pid, "created": today(), "engine": ENGINE,

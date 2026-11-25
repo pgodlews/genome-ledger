@@ -520,6 +520,11 @@ def test_select_and_resume() -> None:
         prs._scoring_file = saved
     check("an intact bundle already written is skipped, not rebuilt",
           done == [PID_A] and calls == [])
+    linked = pgs_chosen.write_bundle(PID_A, ROOT / "carry3", link=True)
+    check("--link hard-links bundle files to the cache",
+          (linked / f"{PID_A}_hmPOS_GRCh38.txt.gz").stat().st_ino
+          == pgs_chosen.scoring_path(PID_A).stat().st_ino
+          and not pgs_chosen.verify_bundle(linked)[1])
 
 
 def test_batch_equals_per_score() -> None:

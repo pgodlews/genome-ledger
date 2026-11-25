@@ -76,6 +76,9 @@ def add_parser(sub) -> None:
     p.add_argument("--batch", type=int, default=1, metavar="N",
                    help="build the 1000 Genomes reference of up to N genome-wide scores in one "
                         "pass over each chromosome (much faster for long lists; same results)")
+    p.add_argument("--link", action="store_true",
+                   help="hard-link bundle files to the cache instead of copying (same filesystem; "
+                        "for a machine building many bundles)")
     p.add_argument("--prune", action="store_true",
                    help="delete the reference panel's genotype intermediates once a "
                         "genome-wide score's bundle data exists (they can run to GBs per score)")
@@ -284,7 +287,7 @@ def run(args, refresh_pages=None) -> int:
         ids = _ids(args)
         if not ids:
             raise SystemExit("name PGS ids, or --from-file")
-        done = pgs_chosen.fetch(ids, args.to, args.refresh, args.prune, args.batch)
+        done = pgs_chosen.fetch(ids, args.to, args.refresh, args.prune, args.batch, args.link)
         print(f"{len(done)} of {len(ids)} ready" + (f"; bundles in {args.to / 'bundles'}"
                                                     if args.to else ""))
         missing = [i for i in ids if i not in done]
