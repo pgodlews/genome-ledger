@@ -32,9 +32,11 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 import urllib.request
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import contextmanager
 from pathlib import Path
 
 from . import reportpaths
@@ -576,35 +578,46 @@ def _pgen(sample: str) -> Path:
     return prefix
 
 
-def _score_plink2(sample: str, pid: str, variants, out_dir: Path) -> tuple[float, int, int]:
+def _score_plink2(sample: str, pid: str, variants, out_dir: Path,
+                  score_file: Path | None = None) -> tuple[float, int, int]:
     """Genome-wide score via `plink2 --score`. Returns (Σ dosage·weight, variants used,
     total). Scores over variants present in the WGS calls; absent (hom-ref) sites contribute
-    0 — exact for alt-effect alleles, an undercount for ref-effect alleles pending force-call."""
+    0 — exact for alt-effect alleles, an undercount for ref-effect alleles pending force-call.
+
+    When `score_file` is None, writes `<pid>.score.txt` into `out_dir` and unlinks it once
+    plink2 finishes (a genome-wide score file can be 100+ MB and is pure scratch). Callers
+    scoring several family members for one PGS can pass a shared `score_file` built once."""
     prefix = _pgen(sample)
-    sf = out_dir / f"{pid}.score.txt"
-    # Via _write_score_file, which drops duplicated coordinates. This path used to write the
-    # file inline and kept them, so plink2 aborted the whole score with
-    #   Error: --score: ALT1 allele for variant '8:141738107' appears multiple times
-    # whenever the sample happened to carry a position the scoring file lists twice with the
-    # allele plink2 knows as ALT1. That is sample-dependent, so the same score could fail for
-    # one person and succeed for the next.
-    _write_score_file(sf, variants)
+    owned = score_file is None
+    sf = out_dir / f"{pid}.score.txt" if owned else score_file
+    if owned:
+        # Via _write_score_file, which drops duplicated coordinates. This path used to write the
+        # file inline and kept them, so plink2 aborted the whole score with
+        #   Error: --score: ALT1 allele for variant '8:141738107' appears multiple times
+        # whenever the sample happened to carry a position the scoring file lists twice with the
+        # allele plink2 knows as ALT1. That is sample-dependent, so the same score could fail for
+        # one person and succeed for the next.
+        _write_score_file(sf, variants)
     op = out_dir / f"{sample}.{pid}"
     log.info("plink2 --score %s (%d variants) for %s …", pid, len(variants), sample)
     logf = config.LOGS_DIR / f"prs_{pid}_{sample}.log"
-    # no-mean-imputation: a single-sample pgen has no allele frequencies to impute from, and
-    # we want absent/missing to contribute 0 (not a population mean) — our scoring convention.
-    subprocess.run([_plink2_bin(), "--pfile", str(prefix), "--score", str(sf),
-                    "1", "2", "3", "header", "cols=+scoresums", "no-mean-imputation",
-                    "--out", str(op)],
-                   check=True, stdout=open(logf, "wb"), stderr=subprocess.STDOUT)
-    rows = (op.parent / f"{op.name}.sscore").read_text().splitlines()
-    header = rows[0].lstrip("#").split("\t")
-    cols = {c: i for i, c in enumerate(header)}
-    score = float(rows[1].split("\t")[cols["SCORE1_SUM"]])
-    m = re.search(r"(\d[\d,]*) variants? processed", logf.read_text())
-    used = int(m.group(1).replace(",", "")) if m else 0
-    return score, used, len(variants)
+    try:
+        # no-mean-imputation: a single-sample pgen has no allele frequencies to impute from, and
+        # we want absent/missing to contribute 0 (not a population mean) — our scoring convention.
+        subprocess.run([_plink2_bin(), "--pfile", str(prefix), "--score", str(sf),
+                        "1", "2", "3", "header", "cols=+scoresums", "no-mean-imputation",
+                        "--out", str(op)],
+                       check=True, stdout=open(logf, "wb"), stderr=subprocess.STDOUT)
+        rows = (op.parent / f"{op.name}.sscore").read_text().splitlines()
+        header = rows[0].lstrip("#").split("\t")
+        cols = {c: i for i, c in enumerate(header)}
+        score = float(rows[1].split("\t")[cols["SCORE1_SUM"]])
+        m = re.search(r"(\d[\d,]*) variants? processed", logf.read_text())
+        used = int(m.group(1).replace(",", "")) if m else 0
+        return score, used, len(variants)
+    finally:
+        if owned:
+            sf.unlink(missing_ok=True)
 
 
 # --- genome-wide percentile: empirical, against the 1000G reference panel ----
@@ -1224,7 +1237,8 @@ def _write_ref_tables(pvars, wants: dict[str, set]) -> dict[str, Path]:
 
 
 def _ref_effect_supplement(variants, covered, workdir: Path,
-                           multi: dict | None = None) -> tuple[float, int]:
+                           multi: dict | None = None,
+                           refs: dict[tuple[str, str], str] | None = None) -> tuple[float, int]:
     """(dosage owed, n variants) at score sites the sample's pgen does not hold.
 
     A variant-only VCF lists only sites where the sample is non-reference, so a score variant
@@ -1250,7 +1264,8 @@ def _ref_effect_supplement(variants, covered, workdir: Path,
     # of lookups and one per score variant.
     uncovered = [v for v in variants
                  if (v[0], v[1]) not in covered and counts[(v[0], v[1])] == 1]
-    refs = _ref_alleles(uncovered, workdir)
+    if refs is None:
+        refs = _ref_alleles(uncovered, workdir)
     total, n, n_unresolved = 0.0, 0, 0
     for chrom, pos, ea, oa, w in uncovered:
         ref = refs.get((chrom, pos))
@@ -1271,15 +1286,31 @@ def _ref_effect_supplement(variants, covered, workdir: Path,
     return total, n
 
 
+_SAMPLE_MEMO_MAX = 16
+_covered_memo: dict[tuple, set[tuple[str, str]]] = {}
+
+
 def _sample_covered(prefix: Path) -> set[tuple[str, str]]:
-    """(chrom,pos) the sample has an explicit genotype for, from its plink2 .pvar."""
+    """(chrom,pos) the sample has an explicit genotype for, from its plink2 .pvar.
+
+    Memoized by (path, size, mtime_ns) across a run: a genome-wide panel or multi-PGS
+    scoring pass otherwise re-reads a ~4.5M-line .pvar on every score."""
+    pvar = prefix.with_suffix(".pvar")
+    st = pvar.stat()
+    key = (str(pvar), st.st_size, st.st_mtime_ns)
+    if key in _covered_memo:
+        return _covered_memo[key]
     covered: set[tuple[str, str]] = set()
-    for line in prefix.with_suffix(".pvar").read_text().splitlines():
-        if line.startswith("#"):
-            continue
-        f = line.split("\t")
-        if len(f) >= 2:
-            covered.add((f[0], f[1]))
+    with pvar.open() as fh:
+        for line in fh:
+            if line.startswith("#"):
+                continue
+            f = line.split("\t", 2)
+            if len(f) >= 2:
+                covered.add((f[0], f[1]))
+    if len(_covered_memo) >= _SAMPLE_MEMO_MAX:
+        _covered_memo.pop(next(iter(_covered_memo)))
+    _covered_memo[key] = covered
     return covered
 
 
@@ -1291,7 +1322,8 @@ def _multi_record_sites(vcf: Path) -> dict[tuple[str, str], tuple[str, str, str]
 
     `--rm-dup exclude-all` removes every record at such a position from the sample's pgen, so
     the .pvar cannot show the sample was called there, and the supplement took a 1/2 site for
-    hom-ref. Read once per VCF per run: every genome-wide score needs the same answer."""
+    hom-ref. Memoized (bounded) across a run so both single-sample panels and multi-person
+    `pgs score` loops read each VCF at most once."""
     st = vcf.stat()
     key = (str(vcf), st.st_size, st.st_mtime_ns)
     if key in _multi_sites_memo:
@@ -1316,7 +1348,8 @@ def _multi_record_sites(vcf: Path) -> dict[tuple[str, str], tuple[str, str, str]
         out[site] = _merge_records(group)
     if proc.wait():
         raise RuntimeError(f"bcftools query failed on {vcf.name} (rc={proc.returncode})")
-    _multi_sites_memo.clear()          # one VCF at a time: a family run must not accumulate
+    if len(_multi_sites_memo) >= _SAMPLE_MEMO_MAX:
+        _multi_sites_memo.pop(next(iter(_multi_sites_memo)))
     _multi_sites_memo[key] = out
     return out
 
@@ -1329,10 +1362,53 @@ def _empirical_percentile(score: float, ref: list[tuple[str, float]]):
     return pct(eur), pct([s for _p, s in ref])
 
 
-def _score_entry(sample: str, entry: dict, gt_vcfs, out_dir: Path) -> dict:
-    """Score one panel row. Raises on failure; the caller isolates it."""
-    pid, trait = entry["pgs_id"], entry["trait"]
+@contextmanager
+def prepared_score(pid: str):
+    """Pre-load the sample-independent inputs for one PGS so a multi-person run parses the
+    scoring file, writes the plink2 score file, and reads the 1000G reference once per score
+    rather than once per person. Cleans up the temporary score file on exit."""
     variants = _load_variants(_scoring_file(pid))
+    if not variants:
+        raise ValueError(f"no usable variants parsed from the {pid} scoring file")
+    scored = _autosomal(variants)
+    if len(variants) > config.PRS_PLINK_MIN:
+        ref = None
+        if config.PRS_GENOMEWIDE_PERCENTILE:
+            try:
+                ref = _reference_scores(pid, scored)
+            except Exception as e:  # noqa: BLE001 — percentile is best-effort
+                log.warning("  genome-wide reference panel unavailable for %s (%s)", pid, e)
+        workdir = config.PGS_DIR / f"{pid}_1kg"
+        refs = None
+        if ref_table(workdir).exists() or any(workdir.glob("chr*.pvar")):
+            try:
+                counts = Counter((v[0], v[1]) for v in scored)
+                unique = [v for v in scored if counts[(v[0], v[1])] == 1]
+                refs = _ref_alleles(unique, workdir)
+            except Exception as e:  # noqa: BLE001 — fall back to per-sample lookup
+                log.warning("  %s: shared ref-allele preload failed (%s)", pid, e)
+        with tempfile.TemporaryDirectory(prefix=f"pgs_{pid}_") as td:
+            sf = Path(td) / f"{pid}.score.txt"
+            _write_score_file(sf, variants)
+            yield {"variants": variants, "scored": scored, "score_file": sf,
+                   "ref": ref, "refs": refs}
+    else:
+        try:
+            freqs = _reference_freqs(pid, scored)
+        except Exception as e:  # noqa: BLE001 — calibration is best-effort
+            log.warning("  calibration unavailable for %s (%s)", pid, e)
+            freqs = {}
+        yield {"variants": variants, "scored": scored, "freqs": freqs}
+
+
+def _score_entry(sample: str, entry: dict, gt_vcfs, out_dir: Path,
+                 prep: dict | None = None) -> dict:
+    """Score one panel row. Raises on failure; the caller isolates it.
+
+    `prep` is an optional dict from `prepared_score(pid)` sharing the sample-independent
+    work across family members."""
+    pid, trait = entry["pgs_id"], entry["trait"]
+    variants = prep["variants"] if prep is not None else _load_variants(_scoring_file(pid))
     if not variants:
         # A score nothing could be parsed from must fail loudly. Scored as-is it yields a
         # raw 0.0 over 0 variants, which renders as an ordinary row and reads as a real
@@ -1342,16 +1418,23 @@ def _score_entry(sample: str, entry: dict, gt_vcfs, out_dir: Path) -> dict:
         # Genome-wide: score with plink2, then take an *empirical* percentile by scoring the
         # same PGS over the 1000G reference panel (restricted to the sample's covered
         # variants). Best-effort — the raw score still stands if the reference run can't run.
-        score, used, total = _score_plink2(sample, pid, variants, out_dir)
+        if prep is not None and prep.get("score_file") is not None:
+            score, used, total = _score_plink2(sample, pid, variants, out_dir,
+                                               score_file=prep["score_file"])
+        else:
+            score, used, total = _score_plink2(sample, pid, variants, out_dir)
         pe = pa = None
         n_supp = 0
-        scored = _autosomal(variants)
-        ref = None
-        if config.PRS_GENOMEWIDE_PERCENTILE:
-            try:
-                ref = _reference_scores(pid, scored)
-            except Exception as e:  # noqa: BLE001 — percentile is best-effort
-                log.warning("  genome-wide reference panel unavailable for %s (%s)", pid, e)
+        scored = prep["scored"] if prep is not None else _autosomal(variants)
+        if prep is not None:
+            ref = prep.get("ref")
+        else:
+            ref = None
+            if config.PRS_GENOMEWIDE_PERCENTILE:
+                try:
+                    ref = _reference_scores(pid, scored)
+                except Exception as e:  # noqa: BLE001 — percentile is best-effort
+                    log.warning("  genome-wide reference panel unavailable for %s (%s)", pid, e)
         # The hom-ref supplement is a property of the SAMPLE, not of the reference run: a
         # variant-only VCF omits sites where the sample is hom-ref, and where the effect
         # allele IS the reference the sample carries two copies plink2 cannot see. Adding it
@@ -1361,9 +1444,15 @@ def _score_entry(sample: str, entry: dict, gt_vcfs, out_dir: Path) -> dict:
         # they exist (see _ref_alleles on why that matters for symmetry).
         try:
             covered = _sample_covered(_pgen(sample))
-            supp, n_supp = _ref_effect_supplement(
-                scored, covered, config.PGS_DIR / f"{pid}_1kg",
-                _multi_record_sites(_called_vcf(sample)))
+            if prep is not None and prep.get("refs") is not None:
+                supp, n_supp = _ref_effect_supplement(
+                    scored, covered, config.PGS_DIR / f"{pid}_1kg",
+                    _multi_record_sites(_called_vcf(sample)),
+                    refs=prep["refs"])
+            else:
+                supp, n_supp = _ref_effect_supplement(
+                    scored, covered, config.PGS_DIR / f"{pid}_1kg",
+                    _multi_record_sites(_called_vcf(sample)))
             score += supp
             if n_supp:
                 log.info("  %s: +%.4f from %d reference-effect allele(s) the "
@@ -1382,16 +1471,19 @@ def _score_entry(sample: str, entry: dict, gt_vcfs, out_dir: Path) -> dict:
         return {**entry, "trait": trait, "pid": pid, "method": "plink2", "raw": score,
                 "used": used + n_supp, "total": total, "pe": pe, "pa": pa}
     else:
-        try:
-            # _autosomal, matching the plink2 path above: a scoring file with an
-            # alt/patch-contig variant (PGS000018 carries one on chr17_KI270857v1_alt)
-            # has no 1000G counterpart, so that chromosome always returns zero rows, the
-            # partial-result guard correctly refuses to cache — and every run then
-            # re-queried every chromosome over the network, forever.
-            freqs = _reference_freqs(pid, _autosomal(variants))
-        except Exception as e:  # noqa: BLE001 — calibration is best-effort
-            log.warning("  calibration unavailable for %s (%s)", pid, e)
-            freqs = {}
+        if prep is not None:
+            freqs = prep.get("freqs") or {}
+        else:
+            try:
+                # _autosomal, matching the plink2 path above: a scoring file with an
+                # alt/patch-contig variant (PGS000018 carries one on chr17_KI270857v1_alt)
+                # has no 1000G counterpart, so that chromosome always returns zero rows, the
+                # partial-result guard correctly refuses to cache — and every run then
+                # re-queried every chromosome over the network, forever.
+                freqs = _reference_freqs(pid, _autosomal(variants))
+            except Exception as e:  # noqa: BLE001 — calibration is best-effort
+                log.warning("  calibration unavailable for %s (%s)", pid, e)
+                freqs = {}
         # Scored after the lookup: the 1000G records also settle which allele of an indel
         # row is REF. Without them those rows are skipped and show in the used count.
         score, n_used, _n_carry, contrib = _score_one(gt_vcfs, variants, freqs)

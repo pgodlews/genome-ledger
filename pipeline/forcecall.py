@@ -27,6 +27,8 @@ exists) and reads off the CRAM, like `call`.
 from __future__ import annotations
 
 import hashlib
+import json
+import os
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -156,12 +158,57 @@ def _sites_hash(recs) -> str:
     return h.hexdigest()[:12]
 
 
+def _inputs_stamp() -> str:
+    """Cheap fingerprint of every input `build_sites` reads (paths + size + mtime_ns).
+
+    Multi-sample `force-call` runs otherwise re-parse every PGS scoring file and run
+    `samtools faidx` over tens of thousands of positions per sample just to rediscover the
+    already-cached `sites_<key>.vcf.gz`."""
+    from . import prs as prs_mod
+
+    h = hashlib.sha256()
+    h.update(f"max={config.FC_MAX_LIST}\n".encode())
+    files: list[Path] = [
+        config.TRAITS_FILE,
+        config.HLA_FILE,
+        config.COMPLEX_PANEL,
+        config.REF_FASTA,
+        config.REF_FASTA.with_suffix(".fa.fai"),
+    ]
+    for r in prs_mod._panel_scores():
+        pid = r["pgs_id"]
+        files.append(config.PGS_DIR / f"{pid}_hmPOS_GRCh38.txt.gz")
+    for p in files:
+        try:
+            st = p.stat()
+            h.update(f"{p}\t{st.st_size}\t{st.st_mtime_ns}\n".encode())
+        except OSError:
+            h.update(f"{p}\tmissing\n".encode())
+    return h.hexdigest()[:16]
+
+
 def build_sites(force: bool = False) -> tuple[Path, Path]:
     """Build (cached) the force-call sites VCF + interval list. Returns (vcf, intervals).
 
     Cache key is a hash of the records, so editing a rules file or adding a PGS score
-    transparently produces a new cache entry (and forces a re-call downstream)."""
+    transparently produces a new cache entry (and forces a re-call downstream). A cheap
+    input-file stamp (`latest.stamp`) short-circuits re-parsing and `faidx` when none of
+    the input files changed."""
     require_tools("bgzip", "tabix", "samtools")  # _ref_bases shells out to samtools faidx
+    stamp_file = config.FC_SITES_DIR / "latest.stamp"
+    inputs = _inputs_stamp() if not force else ""
+    if not force and stamp_file.exists():
+        try:
+            cached = json.loads(stamp_file.read_text())
+            if cached.get("inputs") == inputs and cached.get("key"):
+                k = cached["key"]
+                vcf = config.FC_SITES_DIR / f"sites_{k}.vcf.gz"
+                intervals = config.FC_SITES_DIR / f"sites_{k}.list"
+                if vcf.exists() and vcf.with_suffix(".gz.tbi").exists() and intervals.exists():
+                    return vcf, intervals
+        except (OSError, ValueError):
+            pass
+
     sites = _collect_sites()
     recs = _sites_records(sites)
     if not recs:
@@ -170,22 +217,24 @@ def build_sites(force: bool = False) -> tuple[Path, Path]:
     config.FC_SITES_DIR.mkdir(parents=True, exist_ok=True)
     vcf = config.FC_SITES_DIR / f"sites_{key}.vcf.gz"
     intervals = config.FC_SITES_DIR / f"sites_{key}.list"
-    if vcf.exists() and intervals.exists() and not force:
-        return vcf, intervals
+    if not (vcf.exists() and vcf.with_suffix(".gz.tbi").exists() and intervals.exists()) or force:
+        lengths = _fai_lengths()
+        used_contigs = list(dict.fromkeys(c for c, *_ in recs))  # recs already in .fai order
+        header = ["##fileformat=VCFv4.2",
+                  *[f"##contig=<ID={c},length={lengths[c]}>" for c in used_contigs],
+                  "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO"]
+        body = [f"{c}\t{p}\t.\t{ref}\t{alt}\t.\t.\t." for c, p, ref, alt in recs]
+        raw = config.FC_SITES_DIR / f"sites_{key}.vcf"
+        raw.write_text("\n".join(header + body) + "\n")
+        run(["bgzip", "-f", str(raw)])              # → sites_<key>.vcf.gz
+        run(["tabix", "-f", "-p", "vcf", str(vcf)])
+        intervals.write_text("".join(f"{c}:{p}-{p}\n" for c, p, *_ in recs))
+        log.info("force-call sites: %d SNV positions (%d contigs) → %s",
+                 len(recs), len(used_contigs), vcf.name)
 
-    lengths = _fai_lengths()
-    used_contigs = list(dict.fromkeys(c for c, *_ in recs))  # recs already in .fai order
-    header = ["##fileformat=VCFv4.2",
-              *[f"##contig=<ID={c},length={lengths[c]}>" for c in used_contigs],
-              "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO"]
-    body = [f"{c}\t{p}\t.\t{ref}\t{alt}\t.\t.\t." for c, p, ref, alt in recs]
-    raw = config.FC_SITES_DIR / f"sites_{key}.vcf"
-    raw.write_text("\n".join(header + body) + "\n")
-    run(["bgzip", "-f", str(raw)])              # → sites_<key>.vcf.gz
-    run(["tabix", "-f", "-p", "vcf", str(vcf)])
-    intervals.write_text("".join(f"{c}:{p}-{p}\n" for c, p, *_ in recs))
-    log.info("force-call sites: %d SNV positions (%d contigs) → %s",
-             len(recs), len(used_contigs), vcf.name)
+    tmp = stamp_file.with_name(f"{stamp_file.name}.{os.getpid()}.part")
+    tmp.write_text(json.dumps({"inputs": inputs or _inputs_stamp(), "key": key}) + "\n")
+    os.replace(tmp, stamp_file)
     return vcf, intervals
 
 

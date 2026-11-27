@@ -747,9 +747,110 @@ def test_update() -> None:
          pgs_chosen.rescore_stale, config.PGS_OFFLINE) = saved
 
 
+def test_perf_caching_and_shared_prep() -> None:
+    print("prs / pgs_chosen / forcecall performance caches:")
+    import pathlib
+    import shutil
+    import subprocess
+    import tempfile
+    from pipeline import forcecall as fc
+
+    Path = pathlib.Path
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        # 1. _sample_covered memoizes by (path, size, mtime_ns) and invalidates on change
+        pvar = tmp / "s1.pvar"
+        pvar.write_text("#CHROM\tPOS\tID\tREF\tALT\n1\t100\t1:100\tA\tG\n")
+        prs._covered_memo.clear()
+        c1 = prs._sample_covered(tmp / "s1")
+        c2 = prs._sample_covered(tmp / "s1")
+        check("_sample_covered returns cached set on repeat call", c1 is c2 and c1 == {("1", "100")})
+        pvar.write_text("#CHROM\tPOS\tID\tREF\tALT\n1\t100\t1:100\tA\tG\n1\t200\t1:200\tC\tT\n")
+        c3 = prs._sample_covered(tmp / "s1")
+        check("_sample_covered invalidates when .pvar changes", c3 == {("1", "100"), ("1", "200")})
+
+        # 2. _score_plink2 cleans up its owned <PID>.score.txt, but leaves a shared score_file intact
+        saved_p = (prs._pgen, prs._plink2_bin, subprocess.run, config.LOGS_DIR)
+        config.LOGS_DIR = tmp / "logs"
+        config.LOGS_DIR.mkdir()
+        prs._pgen = lambda s: tmp / "s1"
+        prs._plink2_bin = lambda: "fake-plink2"
+
+        def fake_plink(cmd, **kw):
+            out_idx = cmd.index("--out") + 1
+            op = Path(cmd[out_idx])
+            Path(f"{op}.sscore").write_text("#IID\tSCORE1_SUM\ns1\t1.5\n")
+            kw["stdout"].write(b"1 variants processed.\n")
+            kw["stdout"].flush()
+            return type("R", (), {"returncode": 0})()
+
+        subprocess.run = fake_plink
+        try:
+            sc, used, tot = prs._score_plink2("s1", "PGSTMP1", [("1", "100", "G", "A", 1.5)], tmp)
+            check("_score_plink2 returns score and unlinks owned .score.txt",
+                  sc == 1.5 and used == 1 and tot == 1 and not (tmp / "PGSTMP1.score.txt").exists())
+            shared = tmp / "shared.score.txt"
+            prs._write_score_file(shared, [("1", "100", "G", "A", 1.5)])
+            prs._score_plink2("s1", "PGSTMP2", [("1", "100", "G", "A", 1.5)], tmp, score_file=shared)
+            check("_score_plink2 preserves caller-owned shared score_file", shared.exists())
+        finally:
+            prs._pgen, prs._plink2_bin, subprocess.run, config.LOGS_DIR = saved_p
+
+        # 3. pgs_chosen.score shares prepared_score across multiple people (parses scoring file once)
+        consent.set_consent("Adam", "pgs:" + TRAIT_A, True)
+        consent.set_consent("Lena", "pgs:" + TRAIT_A, True)
+        saved_load = prs._load_variants
+        load_calls = []
+
+        def counting_load(path):
+            load_calls.append(Path(path).name)
+            return saved_load(path)
+
+        prs._load_variants = counting_load
+        try:
+            out = pgs_chosen.score(["PGS999001"], names=["Adam", "Lena"])
+        finally:
+            prs._load_variants = saved_load
+        check("pgs_chosen.score scored both people", len(out["scored"]) == 2 and not out["failed"])
+        check("pgs_chosen.score parsed PGS999001 scoring file only once for 2 people",
+              load_calls == ["PGS999001_hmPOS_GRCh38.txt.gz"])
+
+        # 4. forcecall.build_sites short-circuits via latest.stamp when inputs are unchanged
+        fc_tmp = tmp / "fc_sites"
+        saved_fc = (config.FC_SITES_DIR, fc._collect_sites, fc._ref_bases, fc._fai_lengths, fc._inputs_stamp)
+        collect_calls = []
+        stamp_val = ["v1"]
+        config.FC_SITES_DIR = fc_tmp
+        fc._fai_lengths = lambda: {"1": 1000}
+        fc._ref_bases = lambda pos: {("1", "100"): "A"}
+        fc._inputs_stamp = lambda: stamp_val[0]
+
+        def fake_collect():
+            collect_calls.append(1)
+            return {("1", "100"): {"A", "G"}}
+
+        fc._collect_sites = fake_collect
+        try:
+            v1, i1 = fc.build_sites()
+            v2, i2 = fc.build_sites()
+            check("build_sites hits latest.stamp on second call without re-collecting",
+                  v1 == v2 and i1 == i2 and len(collect_calls) == 1)
+            stamp_val[0] = "v2"
+            fc.build_sites()
+            check("build_sites re-collects when input stamp changes", len(collect_calls) == 2)
+            fc.build_sites(force=True)
+            check("build_sites re-collects on force=True", len(collect_calls) == 3)
+        finally:
+            (config.FC_SITES_DIR, fc._collect_sites, fc._ref_bases,
+             fc._fai_lengths, fc._inputs_stamp) = saved_fc
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 TESTS = [test_covariates, test_catalog_summary, test_gate_before_download, test_consent_and_score,
          test_withdrawal_deletes, test_stale, test_bundle_roundtrip, test_offline,
-         test_ref_table, test_remote_header, test_unsupported, test_select_and_resume, test_batch_equals_per_score, test_batching_is_machine_aware, test_local_zero_rows_are_an_answer, test_update, test_web]
+         test_ref_table, test_remote_header, test_unsupported, test_select_and_resume, test_batch_equals_per_score, test_batching_is_machine_aware, test_local_zero_rows_are_an_answer, test_update, test_web,
+         test_perf_caching_and_shared_prep]
 
 
 def main() -> int:

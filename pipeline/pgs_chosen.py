@@ -574,7 +574,7 @@ def stamp(pid: str, callset: str) -> dict:
             "forcecalled": _token(fc) if (not gw and fc.exists()) else ""}
 
 
-def score_one(callset: str, pid: str) -> dict:
+def score_one(callset: str, pid: str, prep: dict | None = None) -> dict:
     """Compute one result with the panel's own engine, and save it. Callers check consent."""
     from .call import sample_vcf
     from . import forcecall
@@ -590,7 +590,8 @@ def score_one(callset: str, pid: str) -> dict:
     out_dir = config.PRS_CHOSEN_DIR / callset
     out_dir.mkdir(parents=True, exist_ok=True)
     config.LOGS_DIR.mkdir(parents=True, exist_ok=True)     # plink2 logs its pgen build there
-    r = prs._score_entry(callset, {"pgs_id": pid, "trait": trait_label(info)}, gt_vcfs, out_dir)
+    r = prs._score_entry(callset, {"pgs_id": pid, "trait": trait_label(info)},
+                         gt_vcfs, out_dir, prep=prep)
     result = {
         "pgs_id": pid, "traits": info["traits"], "efo_ids": info["efo_ids"],
         "callset": callset, "person": consent._person(callset),
@@ -611,8 +612,10 @@ def score(pids: list[str], names: list[str] | None = None, all_callsets: bool = 
     """Score each chosen score for each named person (default: everyone) who consented.
 
     Consent is checked per person BEFORE anything is downloaded; a score nobody may have is
-    never fetched. Returns {scored: [(callset, pid)], skipped: [(person, pid, why)],
-    failed: [(callset, pid, error)]}."""
+    never fetched. When several callsets are scored for one PGS, sample-independent work
+    (parsing the scoring file, writing the plink2 score file, loading 1000G references) is
+    done once per PGS via `prs.prepared_score`. Returns {scored: [(callset, pid)],
+    skipped: [(person, pid, why)], failed: [(callset, pid, error)]}."""
     say = progress or (lambda msg: log.info("%s", msg))
     who = resolve_people(names)
     out = {"scored": [], "skipped": [], "failed": []}
@@ -640,8 +643,37 @@ def score(pids: list[str], names: list[str] | None = None, all_callsets: bool = 
                 for p in allowed:
                     out["failed"].append((p["id"], pid, why))
                 continue
-        for p in allowed:
-            for cs in (p["callsets"] if all_callsets else p["callsets"][:1]):
+        targets = [cs for p in allowed for cs in (p["callsets"] if all_callsets else p["callsets"][:1])]
+        if len(targets) > 1:
+            problem = engine_problem(pid)
+            if problem:
+                err = f"{pid} cannot be scored here: {problem}"
+                for cs in targets:
+                    out["failed"].append((cs, pid, err))
+                    log.warning("%s → %s failed: %s", pid, cs, err)
+                continue
+            try:
+                ctx = prs.prepared_score(pid)
+                prep = ctx.__enter__()
+            except (Exception, SystemExit) as e:  # noqa: BLE001 — isolate each score
+                for cs in targets:
+                    out["failed"].append((cs, pid, str(e)))
+                    log.warning("%s → %s failed: %s", pid, cs, e)
+                continue
+            try:
+                for cs in targets:
+                    try:
+                        say(f"{pid} → {cs} …")
+                        score_one(cs, pid, prep=prep)
+                        out["scored"].append((cs, pid))
+                        touched.add(cs)
+                    except (Exception, SystemExit) as e:  # noqa: BLE001 — isolate each result
+                        out["failed"].append((cs, pid, str(e)))
+                        log.warning("%s → %s failed: %s", pid, cs, e)
+            finally:
+                ctx.__exit__(None, None, None)
+        else:
+            for cs in targets:
                 try:
                     say(f"{pid} → {cs} …")
                     score_one(cs, pid)
